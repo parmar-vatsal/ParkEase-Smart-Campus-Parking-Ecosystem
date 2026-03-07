@@ -40,7 +40,14 @@ export default function VehicleRegister() {
     const hasEmergencyPass = profile?.emergency_vehicle_until && new Date(profile.emergency_vehicle_until) > new Date()
     const maxTotalVehicles = hasEmergencyPass ? 3 : 1
 
+    let daysSinceDelete = 90
+    if (profile?.last_vehicle_deleted_at) {
+        daysSinceDelete = Math.floor((new Date() - new Date(profile.last_vehicle_deleted_at)) / (1000 * 60 * 60 * 24))
+    }
+    const isUnder90DayPenalty = daysSinceDelete < 90
+
     const isLimitReached = (type) => {
+        if (isUnder90DayPenalty) return true
         if (totalCount >= maxTotalVehicles) return true
         if (type === 'four_wheeler') return fwCount >= 1
         return false
@@ -59,6 +66,12 @@ export default function VehicleRegister() {
         e.preventDefault()
         setLoading(true)
         setError('')
+
+        if (isUnder90DayPenalty) {
+            setError(`You cannot add another vehicle until the 90-day period has passed. (${90 - daysSinceDelete} days remaining)`)
+            setLoading(false)
+            return
+        }
 
         if (isLimitReached(form.vehicleType)) {
             setError(`Registration limit reached. Total allowed: ${maxTotalVehicles}. Please remove an existing vehicle first.`)
@@ -186,6 +199,16 @@ export default function VehicleRegister() {
                         color: '#f43f5e', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: 10
                     }}>
                         <Lock size={16} /> {error}
+                    </div>
+                )}
+
+                {isUnder90DayPenalty && !error && (
+                    <div style={{
+                        padding: '12px 16px', borderRadius: 12, marginBottom: 24,
+                        background: 'rgba(244, 63, 94, 0.1)', border: '1px solid rgba(244, 63, 94, 0.2)',
+                        color: '#f43f5e', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: 10
+                    }}>
+                        <Lock size={16} /> You cannot add another vehicle until the 90-day period has passed. ({90 - daysSinceDelete} days remaining)
                     </div>
                 )}
 
