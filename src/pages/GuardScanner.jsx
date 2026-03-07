@@ -38,8 +38,10 @@ export default function GuardScanner() {
     const videoRef = useRef(null)
     const streamRef = useRef(null)
     const canvasRef = useRef(null)
-    const tesseractWorkerRef = useRef(null)
-    const anprIntervalRef = useRef(null)
+    const html5QrRef = useRef(null)          // QR scanner instance
+    const tesseractWorkerRef = useRef(null)  // Tesseract OCR worker instance
+    const anprIntervalRef = useRef(null)     // ANPR polling interval ID
+    const isProcessingRef = useRef(false)    // Lock to prevent overlapping OCR calls
 
     useEffect(() => {
         fetchCapacity()
@@ -104,52 +106,35 @@ export default function GuardScanner() {
         setScanning(true)
         setScanResult(null)
         try {
+            // Create a fresh Html5Qrcode instance every start
             const html5Qr = new Html5Qrcode('qr-reader')
             html5QrRef.current = html5Qr
 
-            // Camera selection logic to avoid ultra-wide lenses on modern phones
-            let cameraConfig = { facingMode: 'environment' }
-            try {
-                const devices = await Html5Qrcode.getCameras()
-                if (devices && devices.length > 0) {
-                    const backCameras = devices.filter(c => c.label.toLowerCase().includes('back') || c.label.toLowerCase().includes('rear') || c.label.toLowerCase().includes('environment'))
-                    // Filter out keywords indicating ultra-wide lenses
-                    const normalCameras = backCameras.filter(c => !c.label.toLowerCase().includes('ultra') && !c.label.toLowerCase().includes('wide') && !c.label.toLowerCase().includes('0.5'))
-
-                    if (normalCameras.length > 0) {
-                        cameraConfig = normalCameras[normalCameras.length - 1].id // Usually the final "back" camera without ultra/wide is the main one, or the first. Let's just pick the first normal one.
-                        cameraConfig = normalCameras[0].id
-                    } else if (backCameras.length > 0) {
-                        cameraConfig = backCameras[0].id
-                    } else if (devices.length > 0 && devices[0].id) {
-                        // Fallback to the very first device explicitly rather than facingMode if available
-                        // Wait, no, facingMode is safer if label parsing completely fails
-                    }
-                }
-            } catch (camErr) {
-                console.warn('Failed to enumerate cameras, falling back to environment mode', camErr)
-            }
-
+            // IMPORTANT: We always use { facingMode: 'environment' } directly.
+            // Calling Html5Qrcode.getCameras() requires an extra permission step on some
+            // browsers and can fail or throw, causing a false "access denied" path.
             await html5Qr.start(
-                cameraConfig,
+                { facingMode: 'environment' },
                 { fps: 10, qrbox: { width: 250, height: 250 } },
                 (decodedText) => {
                     handleScan(decodedText)
-                    html5Qr.stop().catch(() => { })
+                    html5Qr.stop().catch(() => {})
+                    html5QrRef.current = null
                     setScanning(false)
                 },
-                () => { } // ignore errors
+                () => {} // Ignore per-frame QR decode errors
             )
         } catch (err) {
+            console.error('QR Scanner error:', err)
             setScanning(false)
-            setScanResult({ error: 'Camera access denied. Use manual search.' })
+            setScanResult({ error: `Camera Error: ${err?.message || 'Could not start camera. Check permissions.'}` })
             setResultType('error')
         }
     }
 
     const stopScanner = () => {
         if (html5QrRef.current) {
-            html5QrRef.current.stop().catch(() => { })
+            html5QrRef.current.stop().catch(() => {})
             html5QrRef.current = null
         }
         setScanning(false)
@@ -203,6 +188,7 @@ export default function GuardScanner() {
             clearInterval(anprIntervalRef.current)
             anprIntervalRef.current = null
         }
+        isProcessingRef.current = false // Always unlock when stopping
         if (streamRef.current) {
             streamRef.current.getTracks().forEach(track => track.stop())
             streamRef.current = null
@@ -235,9 +221,12 @@ export default function GuardScanner() {
     }
 
     const captureAndProcessAnprFrame = async () => {
-        if (!videoRef.current || !canvasRef.current || !tesseractWorkerRef.current || anprLoading) return
-        
-        // Prevent overlapping frames
+        // Use a ref-based lock to avoid stale closures from setInterval.
+        // Using state `anprLoading` directly in the interval would always see `false` (stale closure).
+        if (!videoRef.current || !canvasRef.current || !tesseractWorkerRef.current) return
+        if (isProcessingRef.current) return // Prevent overlapping OCR calls
+
+        isProcessingRef.current = true
         setAnprLoading(true)
 
         try {
@@ -247,23 +236,18 @@ export default function GuardScanner() {
             const videoWidth = video.videoWidth || 640
             const videoHeight = video.videoHeight || 480
 
-            if (videoWidth === 0) {
-                 setAnprLoading(false)
-                 return
-            }
+            if (videoWidth === 0) return
 
             // --- OPTIMIZATION: CROP CANVAS ---
             // The UI target box is 80% width and 55% height of the video, centered.
             // This height accommodates BOTH:
             //   - Standard 1-line plates: "GJ 41 ER 4547" (wide, single row)
             //   - Square 2-line rear plates: "GJ41E" on line 1 / "R4547" on line 2
-            // Width stayed at 80% to avoid unnecessary side padding.
             const cropWidth = videoWidth * 0.8
             const cropHeight = videoHeight * 0.55
             const startX = (videoWidth - cropWidth) / 2
             const startY = (videoHeight - cropHeight) / 2
 
-            // Set canvas directly to the cropped dimensions
             canvas.width = cropWidth
             canvas.height = cropHeight
 
@@ -275,37 +259,28 @@ export default function GuardScanner() {
             const { data: { text } } = await tesseractWorkerRef.current.recognize(imageData)
 
             // --- 2-LINE PLATE SUPPORT ---
-            // For square 2-line plates like:
-            //   Line 1: "GJ41E"
-            //   Line 2: "R4547"
-            // We concatenate all lines after stripping non-alphanumeric, so we get: "GJ41ER4547"
+            // Concatenate all non-empty lines so "GJ41E" + "R4547" becomes "GJ41ER4547"
             const rawText = text
                 .split('\n')
                 .map(line => line.replace(/[^A-Z0-9]/gi, '').toUpperCase().trim())
                 .filter(line => line.length > 0)
-                .join('')  // Join all non-empty lines together
+                .join('')
 
             // Indian Plate Regex: State(2) + Dist(1-2) + Series(1-3) + Num(4)
-            // Examples: GJ05AB1234, GJ41ER4547, MH01AB1234, DL8C1234
             const plateMatch = rawText.match(/[A-Z]{2}[0-9]{1,2}[A-Z]{1,3}[0-9]{4}/)
 
             if (plateMatch && plateMatch[0].length >= 8) {
                 const detectedPlate = plateMatch[0]
-                
-                // Pause the camera / scanner loop instantly
                 stopAnprCamera()
                 setManualSearch(detectedPlate)
-                
-                // Pass autoConfirm: true to automatically process the insertion logs
                 await handleManualSearch({ preventDefault: () => {} }, detectedPlate, true)
             }
 
         } catch (err) {
             console.error('Continuous OCR Error:', err)
         } finally {
-            if (scanning) { // Only reset if we haven't stopped the camera
-                setAnprLoading(false)
-            }
+            isProcessingRef.current = false
+            setAnprLoading(false)
         }
     }
 
