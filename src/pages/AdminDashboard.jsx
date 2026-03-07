@@ -146,54 +146,70 @@ export default function AdminDashboard() {
         try {
             const q = searchQuery.trim()
 
-            // Fetch vehicles matching exact vehicle number with strict ilike
+            // 1. Search by vehicle number
             const { data: vehicles, error: vErr } = await supabase
                 .from('parkease_vehicles')
                 .select('*, parkease_profiles(*)')
                 .ilike('vehicle_number', `%${q}%`)
                 .limit(10)
+            if (vErr) throw new Error('Vehicle query error: ' + vErr.message)
 
-            if (vErr) throw new Error("Vehicle query error: " + vErr.message)
-
-            // Fetch profiles matching full_name, phone, or enrollment_id using parallel explicit ilike
-            const [
-                { data: pName, error: pNameErr },
-                { data: pPhone, error: pPhoneErr },
-                { data: pEnroll, error: pEnrollErr }
-            ] = await Promise.all([
+            // 2. Search profiles by name, phone, or enrollment ID in parallel
+            const [{ data: pName }, { data: pPhone }, { data: pEnroll }] = await Promise.all([
                 supabase.from('parkease_profiles').select('*').ilike('full_name', `%${q}%`).limit(10),
                 supabase.from('parkease_profiles').select('*').ilike('phone', `%${q}%`).limit(10),
                 supabase.from('parkease_profiles').select('*').ilike('enrollment_id', `%${q}%`).limit(10)
-            ]);
+            ])
 
-            const profileErrs = [pNameErr, pPhoneErr, pEnrollErr].filter(Boolean);
-            if (profileErrs.length > 0) {
-                console.error("Profile search errors:", profileErrs);
-            }
-
-            // Combine profiles uniquely
-            const allProfiles = [...(pName || []), ...(pPhone || []), ...(pEnroll || [])];
-            const uniqueProfiles = Array.from(new Map(allProfiles.map(p => [p.id, p])).values());
+            // Deduplicate profiles
+            const allProfiles = [...(pName || []), ...(pPhone || []), ...(pEnroll || [])]
+            const uniqueProfiles = Array.from(new Map(allProfiles.map(p => [p.id, p])).values())
 
             let results = [...(vehicles || [])]
 
             if (uniqueProfiles.length > 0) {
-                const profileIds = uniqueProfiles.map(p => p.id).filter(id => !results.some(v => v.owner_id === id))
+                // Only fetch vehicles for profiles NOT already in results
+                const profileIds = uniqueProfiles
+                    .map(p => p.id)
+                    .filter(id => !results.some(v => v.owner_id === id))
                 if (profileIds.length > 0) {
                     const { data: more, error: moreErr } = await supabase
                         .from('parkease_vehicles')
                         .select('*, parkease_profiles(*)')
                         .in('owner_id', profileIds)
-
-                    if (moreErr) throw new Error("Owner query error: " + moreErr.message)
+                    if (moreErr) throw new Error('Owner query error: ' + moreErr.message)
                     results = [...results, ...(more || [])]
                 }
             }
 
-            // Remove duplicates from results just in case
-            const finalResults = Array.from(new Map(results.map(v => [v.id, v])).values());
+            // Deduplicate results
+            results = Array.from(new Map(results.map(v => [v.id, v])).values())
 
-            setSearchResults(finalResults)
+            // 3. Enrich each result: is it currently inside? which zone?
+            if (results.length > 0) {
+                const vIds = results.map(v => v.id)
+                const { data: activeLogs } = await supabase
+                    .from('parkease_logs')
+                    .select('vehicle_id, zone_id, entry_time, parkease_zones(name)')
+                    .in('vehicle_id', vIds)
+                    .eq('status', 'inside')
+
+                const insideMap = new Map(
+                    (activeLogs || []).map(l => [l.vehicle_id, {
+                        isInside: true,
+                        zoneName: l.parkease_zones?.name || null,
+                        entryTime: l.entry_time
+                    }])
+                )
+                results = results.map(v => ({
+                    ...v,
+                    isInside: insideMap.has(v.id),
+                    currentZone: insideMap.get(v.id)?.zoneName || null,
+                    currentEntryTime: insideMap.get(v.id)?.entryTime || null
+                }))
+            }
+
+            setSearchResults(results)
         } catch (err) {
             console.error(err)
             setSearchError(err.message || 'An error occurred during search')
@@ -633,18 +649,31 @@ export default function AdminDashboard() {
                                         <h3 style={{ fontSize: '0.85rem', fontWeight: 700, marginBottom: 12 }}>{searchResults.length} result{searchResults.length !== 1 ? 's' : ''} found</h3>
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                                             {searchResults.map(v => (
-                                                <button key={v.id} onClick={() => viewVehicleDetails(v)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 14px', borderRadius: 10, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', cursor: 'pointer', transition: 'all 0.2s', width: '100%', textAlign: 'left', color: 'white' }}
+                                                <button key={v.id} onClick={() => viewVehicleDetails(v)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 14px', borderRadius: 10, background: 'rgba(255,255,255,0.03)', border: `1px solid ${v.isInside ? 'rgba(16,185,129,0.2)' : 'rgba(255,255,255,0.06)'}`, cursor: 'pointer', transition: 'all 0.2s', width: '100%', textAlign: 'left', color: 'white' }}
                                                     onMouseOver={e => e.currentTarget.style.borderColor = 'rgba(99,102,241,0.3)'}
-                                                    onMouseOut={e => e.currentTarget.style.borderColor = 'rgba(255,255,255,0.06)'}
+                                                    onMouseOut={e => e.currentTarget.style.borderColor = v.isInside ? 'rgba(16,185,129,0.2)' : 'rgba(255,255,255,0.06)'}
                                                 >
                                                     <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                                                         {v.vehicle_type === 'two_wheeler' ? <Bike size={18} color="#818cf8" /> : <CarFront size={18} color="#f59e0b" />}
                                                         <div>
                                                             <div style={{ fontWeight: 700, fontSize: '0.88rem', letterSpacing: '0.04em' }}>{v.vehicle_number}</div>
-                                                            <div style={{ fontSize: '0.72rem', color: '#94a3b8' }}>{v.parkease_profiles?.full_name} • {v.parkease_profiles?.phone}</div>
+                                                            <div style={{ fontSize: '0.72rem', color: '#94a3b8' }}>
+                                                                {v.parkease_profiles?.full_name}
+                                                                {v.parkease_profiles?.enrollment_id && ` • ${v.parkease_profiles.enrollment_id}`}
+                                                                {v.parkease_profiles?.department && ` • ${v.parkease_profiles.department}`}
+                                                            </div>
+                                                            {v.isInside && v.currentZone && (
+                                                                <div style={{ fontSize: '0.68rem', color: '#10b981', marginTop: 2, display: 'flex', alignItems: 'center', gap: 4 }}>
+                                                                    <MapPin size={10} /> {v.currentZone}
+                                                                    {v.currentEntryTime && ` • since ${new Date(v.currentEntryTime).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`}
+                                                                </div>
+                                                            )}
                                                         </div>
                                                     </div>
-                                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                                                        {v.isInside && (
+                                                            <span className="badge badge-success" style={{ fontSize: '0.65rem' }}>🟢 Inside</span>
+                                                        )}
                                                         <span className={`badge ${v.status === 'active' ? 'badge-success' : v.status === 'pending_approval' ? 'badge-warning' : 'badge-danger'}`} style={{ fontSize: '0.65rem' }}>
                                                             {v.status === 'pending_approval' ? 'Pending' : v.status}
                                                         </span>
