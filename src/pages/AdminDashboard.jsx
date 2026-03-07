@@ -68,22 +68,28 @@ export default function AdminDashboard() {
 
     const fetchStats = async () => {
         const today = new Date(); today.setHours(0, 0, 0, 0)
-        const [
-            { count: totalVehicles },
-            { count: currentlyInside },
-            { count: todayEntries },
-            { count: todayExits },
-            { count: totalUsers },
-            { count: pendingApprovals }
-        ] = await Promise.all([
-            supabase.from('parkease_vehicles').select('*', { count: 'exact', head: true }),
-            supabase.from('parkease_logs').select('*', { count: 'exact', head: true }).eq('status', 'inside'),
-            supabase.from('parkease_logs').select('*', { count: 'exact', head: true }).gte('entry_time', today.toISOString()),
-            supabase.from('parkease_logs').select('*', { count: 'exact', head: true }).gte('exit_time', today.toISOString()),
-            supabase.from('parkease_profiles').select('*', { count: 'exact', head: true }),
-            supabase.from('parkease_vehicles').select('*', { count: 'exact', head: true }).eq('status', 'pending_approval'),
-        ])
-        setStats({ totalVehicles: totalVehicles || 0, currentlyInside: currentlyInside || 0, todayEntries: todayEntries || 0, todayExits: todayExits || 0, totalUsers: totalUsers || 0, pendingApprovals: pendingApprovals || 0 })
+        
+        // Count total vehicles
+        const { count: totalVehicles } = await supabase.from('parkease_vehicles').select('*', { count: 'exact', head: true })
+        // Count currently inside
+        const { count: currentlyInside } = await supabase.from('parkease_logs').select('*', { count: 'exact', head: true }).eq('status', 'inside')
+        // Count entries today
+        const { count: todayEntries } = await supabase.from('parkease_logs').select('*', { count: 'exact', head: true }).gte('entry_time', today.toISOString())
+        // Count exits today (only those with status exited and exit_time >= today)
+        const { count: todayExits } = await supabase.from('parkease_logs').select('*', { count: 'exact', head: true }).not('exit_time', 'is', null).gte('exit_time', today.toISOString())
+        // Total users
+        const { count: totalUsers } = await supabase.from('parkease_profiles').select('*', { count: 'exact', head: true })
+        // Pending approvals
+        const { count: pendingApprovals } = await supabase.from('parkease_vehicles').select('*', { count: 'exact', head: true }).eq('status', 'pending_approval')
+        
+        setStats({ 
+            totalVehicles: totalVehicles || 0, 
+            currentlyInside: currentlyInside || 0, 
+            todayEntries: todayEntries || 0, 
+            todayExits: todayExits || 0, 
+            totalUsers: totalUsers || 0, 
+            pendingApprovals: pendingApprovals || 0 
+        })
     }
 
     const fetchCapacity = async () => {
