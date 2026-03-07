@@ -237,6 +237,34 @@ async def health():
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    import threading
+
+    # ── Try to create a free public ngrok tunnel automatically ────────────────
+    public_url = None
+    try:
+        from pyngrok import ngrok, conf
+
+        # Optional: set your ngrok authtoken here if you have one (free signup at ngrok.com)
+        # conf.get_default().auth_token = "YOUR_NGROK_AUTHTOKEN"
+
+        tunnel = ngrok.connect(8000, "http")
+        public_url = tunnel.public_url
+
+        print("\n" + "=" * 65)
+        print("  🚀  ParkEase ANPR Server — PUBLIC URL READY")
+        print("=" * 65)
+        print(f"\n  ✅  Your public HTTPS URL:\n")
+        print(f"      {public_url}\n")
+        print("  ► Open the Guard Scanner on Vercel")
+        print("  ► Switch to 'Read Number Plate' mode")
+        print("  ► Click  ⚙ Configure  and paste the URL above")
+        print("\n" + "=" * 65 + "\n")
+
+    except Exception as ngrok_err:
+        print(f"\n[INFO] ngrok tunnel not started: {ngrok_err}")
+        print("[INFO] Server will run on http://127.0.0.1:8000 (local only)")
+        print("[INFO] For remote access, sign up free at https://ngrok.com\n")
+
     uvicorn.run(
         "anpr_server:app",
         host="127.0.0.1",
