@@ -83,8 +83,16 @@ export default function GuardScanner() {
     }
 
     const fetchCapacity = async () => {
-        const { data } = await supabase.from('parkease_capacity').select('*')
-        setCapacity(data || [])
+        const { data: zonesData } = await supabase.from('parkease_zones').select('*').eq('status', 'active').order('name')
+        const { data: activeLogs } = await supabase.from('parkease_logs').select('zone_id, vehicle_type').eq('status', 'inside')
+        const rows = []
+        for (const zone of (zonesData || [])) {
+            const i2 = (activeLogs || []).filter(l => l.zone_id === zone.id && l.vehicle_type === 'two_wheeler').length
+            const i4 = (activeLogs || []).filter(l => l.zone_id === zone.id && l.vehicle_type === 'four_wheeler').length
+            if (zone.capacity_2w_total > 0) { const t = zone.capacity_2w_total + (zone.capacity_2w_overflow || 0); rows.push({ zone_id: zone.id, zone_name: zone.name, vehicle_type: 'two_wheeler', total_slots: t, available_slots: Math.max(0, t - i2), occupancy_percent: t > 0 ? Math.round((i2 / t) * 100) : 0 }) }
+            if (zone.capacity_4w_total > 0) { const t = zone.capacity_4w_total + (zone.capacity_4w_overflow || 0); rows.push({ zone_id: zone.id, zone_name: zone.name, vehicle_type: 'four_wheeler', total_slots: t, available_slots: Math.max(0, t - i4), occupancy_percent: t > 0 ? Math.round((i4 / t) * 100) : 0 }) }
+        }
+        setCapacity(rows)
     }
 
     const fetchZones = async () => {

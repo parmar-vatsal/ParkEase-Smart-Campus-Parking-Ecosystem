@@ -87,8 +87,32 @@ export default function AdminDashboard() {
     }
 
     const fetchCapacity = async () => {
-        const { data } = await supabase.from('parkease_capacity').select('*')
-        setCapacity(data || [])
+        const { data: zonesData } = await supabase
+            .from('parkease_zones')
+            .select('*')
+            .eq('status', 'active')
+            .order('name')
+
+        const { data: activeLogs } = await supabase
+            .from('parkease_logs')
+            .select('zone_id, vehicle_type')
+            .eq('status', 'inside')
+
+        const capacityRows = []
+        for (const zone of (zonesData || [])) {
+            const inside2w = (activeLogs || []).filter(l => l.zone_id === zone.id && l.vehicle_type === 'two_wheeler').length
+            const inside4w = (activeLogs || []).filter(l => l.zone_id === zone.id && l.vehicle_type === 'four_wheeler').length
+
+            if (zone.capacity_2w_total > 0) {
+                const total = zone.capacity_2w_total + (zone.capacity_2w_overflow || 0)
+                capacityRows.push({ zone_id: zone.id, zone_name: zone.name, zone_code: zone.code, vehicle_type: 'two_wheeler', total_slots: total, available_slots: Math.max(0, total - inside2w), occupancy_percent: total > 0 ? Math.round((inside2w / total) * 100) : 0 })
+            }
+            if (zone.capacity_4w_total > 0) {
+                const total = zone.capacity_4w_total + (zone.capacity_4w_overflow || 0)
+                capacityRows.push({ zone_id: zone.id, zone_name: zone.name, zone_code: zone.code, vehicle_type: 'four_wheeler', total_slots: total, available_slots: Math.max(0, total - inside4w), occupancy_percent: total > 0 ? Math.round((inside4w / total) * 100) : 0 })
+            }
+        }
+        setCapacity(capacityRows)
     }
 
     const fetchAllVehicles = async () => {

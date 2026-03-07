@@ -109,30 +109,45 @@ export default function VehicleRegister() {
         }
 
         try {
-            // Zone Allocation Logic
+            // ─── Zone Allocation Logic ─────────────────────────────────────────
+            // Strategy:
+            // 1. Find zones mapped to the student's department, ordered by priority DESC.
+            // 2. Among those, pick the first zone that has capacity for the vehicle type.
+            // 3. If nothing matches, fall back to any active zone that supports the vehicle type.
             let allocatedZoneId = null;
+
             if (profile?.department) {
+                // Fetch all mapped zone IDs for student's department, highest priority first
                 const { data: deptZones } = await supabase
                     .from('parkease_zone_departments')
-                    .select('zone_id')
+                    .select('zone_id, priority, parkease_zones(id, status, capacity_2w_total, capacity_4w_total)')
                     .eq('department_code', profile.department)
-                    .order('priority', { ascending: true })
-                    .limit(1);
+                    .order('priority', { ascending: false })  // Highest priority first
 
                 if (deptZones && deptZones.length > 0) {
-                    allocatedZoneId = deptZones[0].zone_id;
+                    // Pick first zone that is active AND supports the vehicle type
+                    const capacityField = form.vehicleType === 'two_wheeler' ? 'capacity_2w_total' : 'capacity_4w_total'
+                    const matchingZone = deptZones.find(d =>
+                        d.parkease_zones?.status === 'active' &&
+                        (d.parkease_zones?.[capacityField] || 0) > 0
+                    )
+                    if (matchingZone) {
+                        allocatedZoneId = matchingZone.zone_id
+                    }
                 }
             }
 
-            // Fallback if no department mapped zone
+            // Fallback: pick any active zone that supports the vehicle type
             if (!allocatedZoneId) {
+                const capacityField = form.vehicleType === 'two_wheeler' ? 'capacity_2w_total' : 'capacity_4w_total'
                 const { data: anyZone } = await supabase
                     .from('parkease_zones')
                     .select('id')
                     .eq('status', 'active')
-                    .limit(1);
+                    .gt(capacityField, 0)  // Only zones that support this vehicle type
+                    .limit(1)
                 if (anyZone && anyZone.length > 0) {
-                    allocatedZoneId = anyZone[0].id;
+                    allocatedZoneId = anyZone[0].id
                 }
             }
 

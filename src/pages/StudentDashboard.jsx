@@ -23,10 +23,51 @@ export default function StudentDashboard() {
             .eq('owner_id', profile.id)
             .order('created_at', { ascending: false })
 
-        // Fetch capacity
-        const { data: capData } = await supabase
-            .from('parkease_capacity')
+        // Fetch ALL active zones directly (not the view, which may miss new zones)
+        const { data: zonesData } = await supabase
+            .from('parkease_zones')
             .select('*')
+            .eq('status', 'active')
+            .order('name')
+
+        // Fetch current occupancy from active parking logs
+        const { data: activeLogs } = await supabase
+            .from('parkease_logs')
+            .select('zone_id, vehicle_type')
+            .eq('status', 'inside')
+
+        // Compute capacity rows dynamically so ALL zones always show
+        const capacityRows = []
+        for (const zone of (zonesData || [])) {
+            // Count active vehicles in this zone by type
+            const inside2w = (activeLogs || []).filter(l => l.zone_id === zone.id && l.vehicle_type === 'two_wheeler').length
+            const inside4w = (activeLogs || []).filter(l => l.zone_id === zone.id && l.vehicle_type === 'four_wheeler').length
+
+            if (zone.capacity_2w_total > 0) {
+                const total = zone.capacity_2w_total + (zone.capacity_2w_overflow || 0)
+                capacityRows.push({
+                    zone_id: zone.id,
+                    zone_name: zone.name,
+                    zone_code: zone.code,
+                    vehicle_type: 'two_wheeler',
+                    total_slots: total,
+                    available_slots: Math.max(0, total - inside2w),
+                    occupancy_percent: total > 0 ? Math.round((inside2w / total) * 100) : 0
+                })
+            }
+            if (zone.capacity_4w_total > 0) {
+                const total = zone.capacity_4w_total + (zone.capacity_4w_overflow || 0)
+                capacityRows.push({
+                    zone_id: zone.id,
+                    zone_name: zone.name,
+                    zone_code: zone.code,
+                    vehicle_type: 'four_wheeler',
+                    total_slots: total,
+                    available_slots: Math.max(0, total - inside4w),
+                    occupancy_percent: total > 0 ? Math.round((inside4w / total) * 100) : 0
+                })
+            }
+        }
 
         // Fetch recent logs for user
         const { data: logData } = await supabase
@@ -37,7 +78,7 @@ export default function StudentDashboard() {
             .limit(5)
 
         setVehicles(vehicleData || [])
-        setCapacity(capData || [])
+        setCapacity(capacityRows)
         setRecentLogs(logData || [])
         setLoading(false)
     }
