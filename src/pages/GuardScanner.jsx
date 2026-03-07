@@ -35,11 +35,11 @@ export default function GuardScanner() {
     const [scannerMode, setScannerMode] = useState('qr') // 'qr' or 'anpr'
     const [anprLoading, setAnprLoading] = useState(false)
 
-    const scannerRef = useRef(null)
-    const html5QrRef = useRef(null)
     const videoRef = useRef(null)
     const streamRef = useRef(null)
     const canvasRef = useRef(null)
+    const tesseractWorkerRef = useRef(null)
+    const anprIntervalRef = useRef(null)
 
     useEffect(() => {
         fetchCapacity()
@@ -161,18 +161,32 @@ export default function GuardScanner() {
         setScannerMode('anpr')
         setScanning(true)
         setScanResult(null)
+        setAnprLoading(true)
 
         try {
+            // First initialize Tesseract so we don't block the UI loop later
+            if (!tesseractWorkerRef.current) {
+                tesseractWorkerRef.current = await createWorker('eng')
+            }
+
             const stream = await navigator.mediaDevices.getUserMedia({
                 video: { facingMode: 'environment' }
             })
             if (videoRef.current) {
                 videoRef.current.srcObject = stream
+                
+                // Wait for video meta data to load before starting the loop
+                videoRef.current.onloadedmetadata = () => {
+                     // Start continuous polling loop every 1.5 seconds
+                    anprIntervalRef.current = setInterval(captureAndProcessAnprFrame, 1500)
+                    setAnprLoading(false)
+                }
             }
             streamRef.current = stream
         } catch (err) {
             console.error('ANPR Camera Error', err)
             setScanning(false)
+            setAnprLoading(false)
             setScannerMode('qr')
             setScanResult({ error: 'Failed to access camera for ANPR.' })
             setResultType('error')
@@ -180,6 +194,10 @@ export default function GuardScanner() {
     }
 
     const stopAnprCamera = () => {
+        if (anprIntervalRef.current) {
+            clearInterval(anprIntervalRef.current)
+            anprIntervalRef.current = null
+        }
         if (streamRef.current) {
             streamRef.current.getTracks().forEach(track => track.stop())
             streamRef.current = null
@@ -188,6 +206,7 @@ export default function GuardScanner() {
             videoRef.current.srcObject = null
         }
         setScanning(false)
+        setAnprLoading(false)
     }
 
     const switchMode = async (mode) => {
@@ -206,8 +225,10 @@ export default function GuardScanner() {
         }
     }
 
-    const captureAndProcessAnpr = async () => {
-        if (!videoRef.current || !canvasRef.current) return
+    const captureAndProcessAnprFrame = async () => {
+        if (!videoRef.current || !canvasRef.current || !tesseractWorkerRef.current || anprLoading) return
+        
+        // Prevent overlapping frames
         setAnprLoading(true)
 
         try {
@@ -215,40 +236,45 @@ export default function GuardScanner() {
             const canvas = canvasRef.current
 
             // Set canvas to actual video dimensions
-            canvas.width = video.videoWidth
-            canvas.height = video.videoHeight
+            canvas.width = video.videoWidth || 640
+            canvas.height = video.videoHeight || 480
+
+            if (canvas.width === 0) {
+                 setAnprLoading(false)
+                 return
+            }
 
             const ctx = canvas.getContext('2d')
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-
             const imageData = canvas.toDataURL('image/jpeg', 0.8)
 
-            // Temporary stop camera so it freezes on the captured frame
-            stopAnprCamera()
+            const { data: { text } } = await tesseractWorkerRef.current.recognize(imageData)
 
-            const worker = await createWorker('eng')
-            const { data: { text } } = await worker.recognize(imageData)
-            await worker.terminate()
+            // Extract alphanumeric characters
+            const rawText = text.replace(/[^A-Z0-9]/gi, '').toUpperCase()
+            
+            // Indian Plate Regex: State(2) + Num(1-2) + Letters(1-3) + Num(4)
+            // We'll use a slightly looser regex to catch dirty plates, but strict enough to avoid random noise
+            // like: GJ05AB1234, MH011234, DL8C1234
+            const plateMatch = rawText.match(/[A-Z]{2}[0-9]{1,2}[A-Z]{0,3}[0-9]{4}/)
 
-            // Parse for potential license plate: Remove spaces/special characters, grab uppercase and numbers
-            // We just extract alphanumeric characters. Let the guard correct minor issues.
-            const rawPlate = text.replace(/[^A-Z0-9]/gi, '').toUpperCase()
-
-            if (rawPlate.length >= 4) { // Minimum length for a typical plate
-                setManualSearch(rawPlate)
-                // Fake an event object to pass to handleManualSearch
-                handleManualSearch({ preventDefault: () => { } }, rawPlate)
-            } else {
-                setScanResult({ error: 'Could not read a valid license plate from the image. Please try again or type manually.' })
-                setResultType('error')
+            if (plateMatch && plateMatch[0].length >= 8) {
+                const detectedPlate = plateMatch[0]
+                
+                // Pause the camera / scanner loop instantly
+                stopAnprCamera()
+                setManualSearch(detectedPlate)
+                
+                // Pass autoConfirm: true to automatically process the insertion logs
+                await handleManualSearch({ preventDefault: () => {} }, detectedPlate, true)
             }
 
         } catch (err) {
-            console.error('OCR Error', err)
-            setScanResult({ error: 'Failed to process image for license plates.' })
-            setResultType('error')
+            console.error('Continuous OCR Error:', err)
         } finally {
-            setAnprLoading(false)
+            if (scanning) { // Only reset if we haven't stopped the camera
+                setAnprLoading(false)
+            }
         }
     }
 
@@ -307,7 +333,7 @@ export default function GuardScanner() {
         setSearchLoading(false)
     }
 
-    const processGuest = async (identifier, mode) => {
+    const processGuest = async (identifier, mode, autoConfirm = false) => {
         // identifier can be qr_code_token (JSON string) or otp_code (6 digits)
         const columnMap = identifier.length === 6 && !isNaN(identifier) ? 'otp_code' : 'qr_code_token'
 
@@ -350,7 +376,7 @@ export default function GuardScanner() {
                 zoneName = zones.find(z => z.id === logOptions[0].zone_id)?.name || 'Unknown'
             }
 
-            setScanResult({
+            const stagedScanObj = {
                 guestPass: pass,
                 stagedAction: 'exit',
                 duration: durationMin,
@@ -358,8 +384,15 @@ export default function GuardScanner() {
                 zone: zoneName,
                 isExpired: now > expiry,
                 activeLogId
-            })
+            }
+
+            setScanResult(stagedScanObj)
             setResultType('staged')
+
+            if (autoConfirm) {
+                // Must manually build the current state since confirmAction depends on `scanResult` state which hasn't flushed yet
+                await executeConfirmAction(stagedScanObj, 'exit')
+            }
         }
         else if (pass.status === 'pending' || pass.status === 'pending_approval') {
             // STAGED Entry Flow
@@ -375,14 +408,20 @@ export default function GuardScanner() {
                 return { handled: true }
             }
 
-            setScanResult({
+            const stagedScanObj = {
                 guestPass: pass,
                 stagedAction: 'entry',
                 zone: zones.find(z => z.id === selectedZone)?.name || 'Selected Zone',
                 zoneId: selectedZone,
                 mode
-            })
+            }
+
+            setScanResult(stagedScanObj)
             setResultType('staged')
+
+            if (autoConfirm) {
+                await executeConfirmAction(stagedScanObj, 'entry')
+            }
         }
         else if (pass.status === 'exited') {
             setScanResult({ guestPass: pass, error: '❌ Single-Use Pass Already Exited.' })
@@ -408,7 +447,7 @@ export default function GuardScanner() {
         fetchPendingWalkins()
     }
 
-    const handleManualSearch = async (e, directTerm = null) => {
+    const handleManualSearch = async (e, directTerm = null, autoConfirm = false) => {
         if (e && e.preventDefault) e.preventDefault()
 
         const term = directTerm || manualSearch.trim()
@@ -418,11 +457,10 @@ export default function GuardScanner() {
 
         // If exactly 6 digits, it might be a Guest Pass OTP
         if (term.length === 6 && /^\d+$/.test(term)) {
-            await processGuest(term, 'manual_entry')
+            await processGuest(term, 'manual_entry', autoConfirm)
             // If it processed properly or threw an explicit guest error, we should stop.
-            // But if it was literally just "not found" as a guest, maybe it is a 6-digit enrollment ID.
             if (scanResult && scanResult.error && scanResult.error === 'Invalid Guest Pass or OTP.') {
-                // Do nothing, let it fall through to vehicle search just in case
+                // Do nothing, let it fall through to vehicle search
             } else {
                 setSearchLoading(false)
                 return
@@ -437,9 +475,8 @@ export default function GuardScanner() {
             .limit(5)
 
         if (vehicles && vehicles.length === 1) {
-            await processVehicle(vehicles[0].id, 'manual_entry')
+            await processVehicle(vehicles[0].id, 'manual_entry', autoConfirm)
         } else if (vehicles && vehicles.length > 1) {
-            // Show multiple results
             setScanResult({ vehicles, multiple: true })
             setResultType('multiple')
         } else {
@@ -447,7 +484,7 @@ export default function GuardScanner() {
             const { data: profiles } = await supabase
                 .from('parkease_profiles')
                 .select('*')
-                .or(`enrollment_id.ilike.%${manualSearch.trim()}%,phone.ilike.%${manualSearch.trim()}%`)
+                .or(`enrollment_id.ilike.%${term}%,phone.ilike.%${term}%`)
                 .limit(5)
 
             if (profiles && profiles.length > 0) {
@@ -458,7 +495,7 @@ export default function GuardScanner() {
                     .in('owner_id', profileIds)
 
                 if (profileVehicles?.length > 0) {
-                    await processProfileVehicles(profileVehicles, 'manual_entry')
+                    await processProfileVehicles(profileVehicles, 'manual_entry', autoConfirm)
                 } else {
                     setScanResult({ error: 'No vehicles found for this search.' })
                     setResultType('error')
@@ -471,7 +508,7 @@ export default function GuardScanner() {
         setSearchLoading(false)
     }
 
-    const processProfileVehicles = async (profileVehicles, mode) => {
+    const processProfileVehicles = async (profileVehicles, mode, autoConfirm = false) => {
         if (!profileVehicles || profileVehicles.length === 0) {
             setScanResult({ error: 'No vehicles found.' })
             setResultType('error')
@@ -486,23 +523,22 @@ export default function GuardScanner() {
             .eq('status', 'inside')
 
         // If there's exactly 1 vehicle inside from this list, assume they want to EXIT that one!
-        // This solves the issue where users with multiple vehicles have to select which one to exit.
         if (activeLogs && activeLogs.length === 1) {
-            await processVehicle(activeLogs[0].vehicle_id, mode)
+            await processVehicle(activeLogs[0].vehicle_id, mode, autoConfirm)
             return
         }
 
         // Otherwise, if they just have 1 vehicle total, process it
         if (profileVehicles.length === 1) {
-            await processVehicle(profileVehicles[0].id, mode)
+            await processVehicle(profileVehicles[0].id, mode, autoConfirm)
         } else {
-            // Otherwise ask them to select which one (e.g. they are entering for the first time today)
+            // Ask them to select which one
             setScanResult({ vehicles: profileVehicles, multiple: true })
             setResultType('multiple')
         }
     }
 
-    const processVehicle = async (vehicleId, mode) => {
+    const processVehicle = async (vehicleId, mode, autoConfirm = false) => {
         // Fetch vehicle with owner
         const { data: vehicle } = await supabase
             .from('parkease_vehicles')
@@ -543,15 +579,21 @@ export default function GuardScanner() {
             const now = new Date()
             const durationMin = Math.round((now - entryTime) / 60000)
 
-            setScanResult({
+            const stagedScanObj = {
                 vehicle,
                 stagedAction: 'exit',
                 duration: durationMin,
                 entryTime: log.entry_time,
                 zone: zones.find(z => z.id === log.zone_id)?.name || 'Unknown',
                 activeLogId: log.id
-            })
+            }
+
+            setScanResult(stagedScanObj)
             setResultType('staged')
+
+            if (autoConfirm) {
+                await executeConfirmAction(stagedScanObj, 'exit')
+            }
         } else {
             // STAGED ENTRY flow
 
@@ -585,7 +627,7 @@ export default function GuardScanner() {
                 allocatedZoneName = zones.find(z => z.id === vehicle.allocated_zone_id)?.name || 'Another Zone'
             }
 
-            setScanResult({
+            const stagedScanObj = {
                 vehicle,
                 stagedAction: 'entry',
                 zone: zones.find(z => z.id === selectedZone)?.name || 'Selected Zone',
@@ -593,58 +635,63 @@ export default function GuardScanner() {
                 mode,
                 wrongZone,
                 allocatedZoneName
-            })
+            }
+
+            setScanResult(stagedScanObj)
             setResultType('staged')
+
+            if (autoConfirm && !wrongZone) { // Don't auto-confirm if wrong zone, guard must see the warning
+                await executeConfirmAction(stagedScanObj, 'entry')
+            }
         }
         setManualSearch('')
     }
 
-    const confirmAction = async () => {
-        if (!scanResult) return
-
+    const executeConfirmAction = async (scanObj, explicitAction) => {
+        // Helper function for autoConfirm to skip state dependency
         try {
-            if (scanResult.stagedAction === 'entry') {
-                if (scanResult.vehicle) {
+            if (explicitAction === 'entry') {
+                if (scanObj.vehicle) {
                     const { error } = await supabase.from('parkease_logs').insert({
-                        vehicle_id: scanResult.vehicle.id,
-                        user_id: scanResult.vehicle.owner_id,
-                        vehicle_number: scanResult.vehicle.vehicle_number,
-                        zone_id: scanResult.zoneId,
+                        vehicle_id: scanObj.vehicle.id,
+                        user_id: scanObj.vehicle.owner_id,
+                        vehicle_number: scanObj.vehicle.vehicle_number,
+                        zone_id: scanObj.zoneId,
                         guard_id: profile.id,
                         status: 'inside',
-                        entry_mode: scanResult.mode,
+                        entry_mode: scanObj.mode,
                     })
                     if (error) throw error
 
-                    setScanResult({ ...scanResult, action: 'entry' })
+                    setScanResult({ ...scanObj, action: 'entry' })
                     setResultType('entry')
-                } else if (scanResult.guestPass) {
-                    const pass = scanResult.guestPass
+                } else if (scanObj.guestPass) {
+                    const pass = scanObj.guestPass
                     await supabase.from('parkease_guest_passes').update({ status: 'active', entry_time: new Date().toISOString(), entry_count: pass.entry_count + 1 }).eq('id', pass.id)
                     await supabase.from('parkease_logs').insert({
                         user_id: pass.sponsor_id,
                         vehicle_number: pass.vehicle_number,
-                        zone_id: scanResult.zoneId,
+                        zone_id: scanObj.zoneId,
                         guard_id: profile.id,
                         status: 'inside',
-                        entry_mode: scanResult.mode,
+                        entry_mode: scanObj.mode,
                     })
-                    setScanResult({ ...scanResult, action: 'entry' })
+                    setScanResult({ ...scanObj, action: 'entry' })
                     setResultType('entry')
                 }
-            } else if (scanResult.stagedAction === 'exit') {
+            } else if (explicitAction === 'exit') {
                 const now = new Date().toISOString()
-                if (scanResult.vehicle) {
-                    await supabase.from('parkease_logs').update({ exit_time: now, status: 'exited', duration_minutes: scanResult.duration }).eq('id', scanResult.activeLogId)
-                    setScanResult({ ...scanResult, action: 'exit' })
+                if (scanObj.vehicle) {
+                    await supabase.from('parkease_logs').update({ exit_time: now, status: 'exited', duration_minutes: scanObj.duration }).eq('id', scanObj.activeLogId)
+                    setScanResult({ ...scanObj, action: 'exit' })
                     setResultType('exit')
-                } else if (scanResult.guestPass) {
-                    const pass = scanResult.guestPass
+                } else if (scanObj.guestPass) {
+                    const pass = scanObj.guestPass
                     await supabase.from('parkease_guest_passes').update({ status: 'exited', exit_time: now }).eq('id', pass.id)
-                    if (scanResult.activeLogId) {
-                        await supabase.from('parkease_logs').update({ exit_time: now, status: 'exited', duration_minutes: scanResult.duration }).eq('id', scanResult.activeLogId)
+                    if (scanObj.activeLogId) {
+                        await supabase.from('parkease_logs').update({ exit_time: now, status: 'exited', duration_minutes: scanObj.duration }).eq('id', scanObj.activeLogId)
                     }
-                    setScanResult({ ...scanResult, action: 'exit' })
+                    setScanResult({ ...scanObj, action: 'exit' })
                     setResultType('exit')
                 }
             }
@@ -657,6 +704,11 @@ export default function GuardScanner() {
             setScanResult({ error: err.message })
             setResultType('error')
         }
+    }
+
+    const confirmAction = async () => {
+        if (!scanResult) return
+        await executeConfirmAction(scanResult, scanResult.stagedAction)
     }
 
     const handleLookupSearch = async (e, directTerm = null) => {
@@ -842,22 +894,42 @@ export default function GuardScanner() {
                                 display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none'
                             }}>
                                 <div style={{
-                                    width: '80%', height: '30%', border: '2px dashed rgba(255,255,255,0.7)',
-                                    borderRadius: 8, boxShadow: '0 0 0 9999px rgba(0,0,0,0.5)'
-                                }} />
-                                <div style={{ position: 'absolute', top: 20, color: 'white', fontWeight: 600, textShadow: '0 2px 4px rgba(0,0,0,0.5)', fontSize: '0.9rem' }}>
+                                    width: '80%', height: '30%', border: '2px solid rgba(16, 185, 129, 0.5)',
+                                    borderRadius: 8, boxShadow: '0 0 0 9999px rgba(0,0,0,0.6)',
+                                    position: 'relative', overflow: 'hidden'
+                                }}>
+                                    {/* Animated scan line */}
+                                    <div style={{
+                                        position: 'absolute', top: 0, left: 0, right: 0, height: 2,
+                                        background: '#10b981', boxShadow: '0 0 8px #10b981',
+                                        animation: 'scan 2.5s linear infinite'
+                                    }} />
+                                    <style>
+                                        {`
+                                            @keyframes scan {
+                                                0% { top: 0%; opacity: 0; }
+                                                10% { opacity: 1; }
+                                                90% { opacity: 1; }
+                                                100% { top: 100%; opacity: 0; }
+                                            }
+                                            @keyframes pulse-dot {
+                                                0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+                                                70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(16, 185, 129, 0); }
+                                                100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+                                            }
+                                        `}
+                                    </style>
+                                </div>
+                                <div style={{ position: 'absolute', top: 30, display: 'flex', alignItems: 'center', gap: 10, background: 'rgba(0,0,0,0.8)', padding: '10px 16px', borderRadius: 20, border: '1px solid rgba(16, 185, 129, 0.4)' }}>
+                                    <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#10b981', animation: 'pulse-dot 2s infinite' }} />
+                                    <span style={{ color: '#10b981', fontWeight: 600, fontSize: '0.9rem', letterSpacing: '0.05em' }}>
+                                        AUTO-SCANNING ACTIVE
+                                    </span>
+                                </div>
+                                <div style={{ position: 'absolute', bottom: 30, color: 'white', fontWeight: 600, textShadow: '0 2px 4px rgba(0,0,0,0.8)', fontSize: '0.95rem' }}>
                                     Align license plate within the box
                                 </div>
                             </div>
-
-                            <button
-                                onClick={captureAndProcessAnpr}
-                                disabled={anprLoading}
-                                className="btn btn-primary btn-lg"
-                                style={{ position: 'absolute', bottom: 16, left: 16, right: 16, boxShadow: '0 4px 12px rgba(0,0,0,0.3)' }}
-                            >
-                                {anprLoading ? <div className="spinner" /> : <><Camera size={18} /> Capture & Read Plate</>}
-                            </button>
 
                             {/* Hidden canvas for capturing frame */}
                             <canvas ref={canvasRef} style={{ display: 'none' }} />
@@ -1163,22 +1235,19 @@ export default function GuardScanner() {
                                 display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none'
                             }}>
                                 <div style={{
-                                    width: '80%', height: '30%', border: '2px dashed rgba(255,255,255,0.7)',
-                                    borderRadius: 8, boxShadow: '0 0 0 9999px rgba(0,0,0,0.5)'
+                                    width: '80%', height: '30%', border: '2px dashed rgba(16, 185, 129, 0.5)',
+                                    borderRadius: 8, boxShadow: '0 0 0 9999px rgba(0,0,0,0.6)'
                                 }} />
-                                <div style={{ position: 'absolute', top: 20, color: 'white', fontWeight: 600, textShadow: '0 2px 4px rgba(0,0,0,0.5)', fontSize: '0.9rem' }}>
+                                <div style={{ position: 'absolute', top: 30, display: 'flex', alignItems: 'center', gap: 10, background: 'rgba(0,0,0,0.8)', padding: '10px 16px', borderRadius: 20, border: '1px solid rgba(16, 185, 129, 0.4)' }}>
+                                    <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#10b981', animation: 'pulse-dot 2s infinite' }} />
+                                    <span style={{ color: '#10b981', fontWeight: 600, fontSize: '0.9rem', letterSpacing: '0.05em' }}>
+                                        AUTO-SCANNING ACTIVE
+                                    </span>
+                                </div>
+                                <div style={{ position: 'absolute', bottom: 30, color: 'white', fontWeight: 600, textShadow: '0 2px 4px rgba(0,0,0,0.8)', fontSize: '0.95rem' }}>
                                     Align license plate within the box
                                 </div>
                             </div>
-
-                            <button
-                                onClick={captureAndProcessAnpr}
-                                disabled={anprLoading}
-                                className="btn btn-primary btn-lg"
-                                style={{ position: 'absolute', bottom: 16, left: 16, right: 16, boxShadow: '0 4px 12px rgba(0,0,0,0.3)' }}
-                            >
-                                {anprLoading ? <div className="spinner" /> : <><Camera size={18} /> Capture & Read Plate</>}
-                            </button>
 
                             <canvas ref={canvasRef} style={{ display: 'none' }} />
                         </div>
