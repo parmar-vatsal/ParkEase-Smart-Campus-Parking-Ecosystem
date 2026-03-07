@@ -258,12 +258,12 @@ export default function VehicleRegister() {
                                         transform: isSelected ? 'scale(1.02)' : 'scale(1)'
                                     }}
                                 >
-                                    <Icon size={32} color={isSelected ? '#818cf8' : '#475569'} style={{ marginBottom: 10 }} />
-                                    <div style={{ fontWeight: 700, fontSize: '0.9rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                                    <Icon size={32} color={isSelected ? '#818cf8' : '#475569'} style={{ marginBottom: 10, margin: '0 auto' }} />
+                                    <div style={{ fontWeight: 700, fontSize: '0.9rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, width: '100%', marginTop: 10 }}>
                                         {label}
                                         {locked && <Lock size={12} color="#f43f5e" />}
                                     </div>
-                                    <div style={{ fontSize: '0.75rem', color: locked ? '#f43f5e' : isSelected ? '#818cf8' : '#64748b', marginTop: 4, fontWeight: 500 }}>
+                                    <div style={{ fontSize: '0.75rem', color: locked ? '#f43f5e' : isSelected ? '#818cf8' : '#64748b', marginTop: 4, fontWeight: 500, width: '100%', textAlign: 'center' }}>
                                         {value === 'four_wheeler' ? `${count}/1 Registered` : `${count} Registered`}
                                     </div>
                                     {isSelected && <div style={{ position: 'absolute', top: 8, right: 8, width: 6, height: 6, borderRadius: '50%', background: '#6366f1' }} />}
@@ -280,7 +280,7 @@ export default function VehicleRegister() {
                         <Hash size={18} style={{ position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)', color: '#475569' }} />
                         <input
                             className="input"
-                            style={{ paddingLeft: 44, height: 50, textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 800, fontSize: '1rem' }}
+                            style={{ paddingLeft: 46, height: 50, textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 800, fontSize: '1rem' }}
                             placeholder="GJ05AB1234"
                             value={form.vehicleNumber}
                             onChange={(e) => updateForm('vehicleNumber', formatVehicleNumber(e.target.value))}
