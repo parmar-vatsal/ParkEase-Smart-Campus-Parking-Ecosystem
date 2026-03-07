@@ -166,7 +166,12 @@ export default function GuardScanner() {
         try {
             // First initialize Tesseract so we don't block the UI loop later
             if (!tesseractWorkerRef.current) {
-                tesseractWorkerRef.current = await createWorker('eng')
+                const worker = await createWorker('eng')
+                // Tesseract Optimization: Whitelist Indian Plate Characters + Space
+                await worker.setParameters({
+                    tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ',
+                })
+                tesseractWorkerRef.current = worker
             }
 
             const stream = await navigator.mediaDevices.getUserMedia({
@@ -177,8 +182,8 @@ export default function GuardScanner() {
                 
                 // Wait for video meta data to load before starting the loop
                 videoRef.current.onloadedmetadata = () => {
-                     // Start continuous polling loop every 1.5 seconds
-                    anprIntervalRef.current = setInterval(captureAndProcessAnprFrame, 1500)
+                     // Start continuous polling loop every 800ms for hyper-responsiveness
+                    anprIntervalRef.current = setInterval(captureAndProcessAnprFrame, 800)
                     setAnprLoading(false)
                 }
             }
@@ -235,17 +240,32 @@ export default function GuardScanner() {
             const video = videoRef.current
             const canvas = canvasRef.current
 
-            // Set canvas to actual video dimensions
-            canvas.width = video.videoWidth || 640
-            canvas.height = video.videoHeight || 480
+            const videoWidth = video.videoWidth || 640
+            const videoHeight = video.videoHeight || 480
 
-            if (canvas.width === 0) {
+            if (videoWidth === 0) {
                  setAnprLoading(false)
                  return
             }
 
+            // --- OPTIMIZATION: CROP CANVAS ---
+            // The UI shows a targeted box that is 80% width and 30% height, centered.
+            // We only need to process these pixels, ignoring the rest of the camera feed.
+            // This reduces Tesseract processing load by ~76%
+            const cropWidth = videoWidth * 0.8
+            const cropHeight = videoHeight * 0.3
+            const startX = (videoWidth - cropWidth) / 2
+            const startY = (videoHeight - cropHeight) / 2
+
+            // Set canvas directly to the cropped dimensions
+            canvas.width = cropWidth
+            canvas.height = cropHeight
+
             const ctx = canvas.getContext('2d')
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+            // drawImage(image, sx, sy, sWidth, sHeight, dx, dy, dWidth, dHeight)
+            ctx.drawImage(video, startX, startY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight)
+            
+            // Greyscale optimization isn't strictly necessary yet but limits data payload size
             const imageData = canvas.toDataURL('image/jpeg', 0.8)
 
             const { data: { text } } = await tesseractWorkerRef.current.recognize(imageData)
