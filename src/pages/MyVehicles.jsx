@@ -9,6 +9,14 @@ export default function MyVehicles() {
     const [vehicles, setVehicles] = useState([])
     const [loading, setLoading] = useState(true)
     const [actionLoading, setActionLoading] = useState(false)
+    const [deleteError, setDeleteError] = useState('')
+
+    // 90-day deletion cooldown derived from profile
+    const daysSinceDelete = profile?.last_vehicle_deleted_at
+        ? Math.floor((new Date() - new Date(profile.last_vehicle_deleted_at)) / (1000 * 60 * 60 * 24))
+        : 999
+    const isUnderDeleteCooldown = daysSinceDelete < 90
+    const deleteDaysRemaining = Math.max(0, 90 - daysSinceDelete)
 
     useEffect(() => {
         fetchVehicles()
@@ -76,21 +84,25 @@ export default function MyVehicles() {
     }
 
     const handleDelete = async (id) => {
-        if (!confirm('Are you sure you want to delete this vehicle?')) return
+        if (isUnderDeleteCooldown) {
+            setDeleteError(`You already deleted a vehicle ${daysSinceDelete} day(s) ago. You cannot delete another vehicle for ${deleteDaysRemaining} more day${deleteDaysRemaining !== 1 ? 's' : ''} (90-day policy).`)
+            return
+        }
+
+        if (!confirm('Are you sure you want to delete this vehicle? This will start a 90-day cooldown on deleting any other vehicle.')) return
 
         setActionLoading(true)
+        setDeleteError('')
 
-        // Use .select() so we can check if it actually deleted a row.
         const { data: delData, error: delErr } = await supabase.from('parkease_vehicles').delete().eq('id', id).select()
 
         if (delErr) {
             console.error('Delete error', delErr)
-            alert('Failed to delete vehicle: ' + delErr.message)
+            setDeleteError('Failed to delete vehicle: ' + delErr.message)
         } else if (!delData || delData.length === 0) {
-            // RLS blocked the deletion (silent failure)
-            alert('Cannot delete: You do not have permission, or it is linked to active parking logs.')
+            setDeleteError('Cannot delete: This vehicle may be linked to an active parking session. Please exit first.')
         } else {
-            // Success! Update profile with the deletion timestamp
+            // Start the 90-day deletion cooldown
             await supabase.from('parkease_profiles').update({ last_vehicle_deleted_at: new Date().toISOString() }).eq('id', profile.id)
             setVehicles(vehicles.filter(v => v.id !== id))
             window.location.reload()
@@ -113,6 +125,34 @@ export default function MyVehicles() {
             <p style={{ color: '#94a3b8', fontSize: '0.85rem', marginBottom: 24 }}>
                 {vehicles.length} vehicle{vehicles.length !== 1 ? 's' : ''} registered
             </p>
+
+            {/* 90-Day Deletion Cooldown Banner */}
+            {isUnderDeleteCooldown && (
+                <div style={{
+                    padding: '14px 20px', borderRadius: 14, marginBottom: 24,
+                    background: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.3)',
+                    color: '#f59e0b',
+                }}>
+                    <div style={{ fontWeight: 700, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <Clock size={16} /> 90-Day Deletion Policy Active
+                    </div>
+                    <div style={{ fontSize: '0.82rem', color: '#fbbf24', lineHeight: 1.6 }}>
+                        You deleted a vehicle {daysSinceDelete} day(s) ago. You cannot delete another vehicle for <b>{deleteDaysRemaining} more day{deleteDaysRemaining !== 1 ? 's' : ''}</b>.
+                    </div>
+                </div>
+            )}
+
+            {/* General Delete Error */}
+            {deleteError && (
+                <div style={{
+                    padding: '12px 16px', borderRadius: 12, marginBottom: 20,
+                    background: 'rgba(244, 63, 94, 0.1)', border: '1px solid rgba(244, 63, 94, 0.2)',
+                    color: '#f43f5e', fontSize: '0.85rem',
+                }}>
+                    ❌ {deleteError}
+                    <button onClick={() => setDeleteError('')} style={{ marginLeft: 12, background: 'none', border: 'none', color: '#f43f5e', cursor: 'pointer', fontWeight: 700 }}>✕</button>
+                </div>
+            )}
 
             {/* Unified Student QR Code */}
             {vehicles.some(v => v.status === 'active') && (
@@ -284,11 +324,18 @@ export default function MyVehicles() {
                                 <div style={{ display: 'flex', gap: 8, marginTop: 16, paddingTop: 16, borderTop: '1px solid rgba(255,255,255,0.05)' }}>
                                     <button
                                         className="btn btn-ghost"
-                                        style={{ flex: 1, fontSize: '0.75rem', padding: '8px 0', color: '#f43f5e', background: 'rgba(244,63,94,0.1)' }}
+                                        style={{
+                                            flex: 1, fontSize: '0.75rem', padding: '8px 0',
+                                            color: isUnderDeleteCooldown ? '#64748b' : '#f43f5e',
+                                            background: isUnderDeleteCooldown ? 'rgba(100,116,139,0.08)' : 'rgba(244,63,94,0.1)',
+                                            cursor: isUnderDeleteCooldown ? 'not-allowed' : 'pointer',
+                                        }}
                                         onClick={() => handleDelete(vehicle.id)}
-                                        disabled={actionLoading}
+                                        disabled={actionLoading || isUnderDeleteCooldown}
+                                        title={isUnderDeleteCooldown ? `90-day deletion cooldown active (${deleteDaysRemaining} days left)` : 'Remove this vehicle'}
                                     >
-                                        <Trash2 size={14} style={{ marginRight: 6 }} /> Remove Vehicle
+                                        <Trash2 size={14} style={{ marginRight: 6 }} />
+                                        {isUnderDeleteCooldown ? `Locked for ${deleteDaysRemaining}d` : 'Remove Vehicle'}
                                     </button>
                                 </div>
                             </div>

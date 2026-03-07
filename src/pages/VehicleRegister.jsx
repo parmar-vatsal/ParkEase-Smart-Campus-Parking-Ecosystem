@@ -35,21 +35,39 @@ export default function VehicleRegister() {
 
     const twCount = existingVehicles.filter(v => v.vehicle_type === 'two_wheeler' && v.status !== 'rejected').length
     const fwCount = existingVehicles.filter(v => v.vehicle_type === 'four_wheeler' && v.status !== 'rejected').length
-    const totalCount = twCount + fwCount
 
+    // ── 90-Day Policy ──────────────────────────────────────────────────────────
+    // Track both addition and deletion. Whichever happened more recently drives the cooldown.
+    const daysSinceDelete = profile?.last_vehicle_deleted_at
+        ? Math.floor((new Date() - new Date(profile.last_vehicle_deleted_at)) / (1000 * 60 * 60 * 24))
+        : 999
+    const daysSinceAdd = profile?.last_vehicle_added_at
+        ? Math.floor((new Date() - new Date(profile.last_vehicle_added_at)) / (1000 * 60 * 60 * 24))
+        : 999
+
+    const isUnder90DayDeletePenalty = daysSinceDelete < 90
+    const isUnder90DayAddPenalty = daysSinceAdd < 90
+    // Combined: blocked if EITHER a recent add or delete is within 90 days
+    const isUnder90DayPenalty = isUnder90DayDeletePenalty || isUnder90DayAddPenalty
+
+    // The cooldown message changes depending on the reason
+    const penaltyReason = isUnder90DayDeletePenalty
+        ? `You deleted a vehicle ${daysSinceDelete} day(s) ago.`
+        : `You registered a vehicle ${daysSinceAdd} day(s) ago.`
+    const daysRemaining = isUnder90DayDeletePenalty
+        ? 90 - daysSinceDelete
+        : 90 - daysSinceAdd
+
+    // ── Per-Type Limits ────────────────────────────────────────────────────────
+    // Max: 2 two-wheelers, 1 four-wheeler (Emergency pass grants an extra 4W slot)
     const hasEmergencyPass = profile?.emergency_vehicle_until && new Date(profile.emergency_vehicle_until) > new Date()
-    const maxTotalVehicles = hasEmergencyPass ? 3 : 1
-
-    let daysSinceDelete = 90
-    if (profile?.last_vehicle_deleted_at) {
-        daysSinceDelete = Math.floor((new Date() - new Date(profile.last_vehicle_deleted_at)) / (1000 * 60 * 60 * 24))
-    }
-    const isUnder90DayPenalty = daysSinceDelete < 90
+    const maxFW = hasEmergencyPass ? 2 : 1
+    const maxTW = 2
 
     const isLimitReached = (type) => {
         if (isUnder90DayPenalty) return true
-        if (totalCount >= maxTotalVehicles) return true
-        if (type === 'four_wheeler') return fwCount >= 1
+        if (type === 'two_wheeler') return twCount >= maxTW
+        if (type === 'four_wheeler') return fwCount >= maxFW
         return false
     }
 
@@ -68,13 +86,17 @@ export default function VehicleRegister() {
         setError('')
 
         if (isUnder90DayPenalty) {
-            setError(`You cannot add another vehicle until the 90-day period has passed. (${90 - daysSinceDelete} days remaining)`)
+            setError(`🚫 ${penaltyReason} You cannot register another vehicle until the 90-day policy period has passed. (${daysRemaining} day${daysRemaining !== 1 ? 's' : ''} remaining)`)
             setLoading(false)
             return
         }
 
         if (isLimitReached(form.vehicleType)) {
-            setError(`Registration limit reached. Total allowed: ${maxTotalVehicles}. Please remove an existing vehicle first.`)
+            if (form.vehicleType === 'two_wheeler') {
+                setError(`You have reached the maximum of ${maxTW} two-wheeler(s). Remove an existing one before adding another.`)
+            } else {
+                setError(`You have reached the maximum of ${maxFW} four-wheeler(s). Remove an existing one before adding another.`)
+            }
             setLoading(false)
             return
         }
@@ -133,6 +155,12 @@ export default function VehicleRegister() {
                 console.error("Supabase Insert Error Body:", insertErr);
                 throw insertErr;
             }
+
+            // Track the addition timestamp for the 90-day cooldown
+            await supabase
+                .from('parkease_profiles')
+                .update({ last_vehicle_added_at: new Date().toISOString() })
+                .eq('id', profile.id)
 
             setSuccess(true)
             setTimeout(() => navigate('/student/vehicles'), 2000)
@@ -216,11 +244,17 @@ export default function VehicleRegister() {
 
                 {isUnder90DayPenalty && !error && (
                     <div style={{
-                        padding: '12px 16px', borderRadius: 12, marginBottom: 24,
+                        padding: '14px 16px', borderRadius: 12, marginBottom: 24,
                         background: 'rgba(244, 63, 94, 0.1)', border: '1px solid rgba(244, 63, 94, 0.2)',
-                        color: '#f43f5e', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: 10
+                        color: '#f43f5e', fontSize: '0.85rem',
                     }}>
-                        <Lock size={16} /> You cannot add another vehicle until the 90-day period has passed. ({90 - daysSinceDelete} days remaining)
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+                            <Lock size={16} />
+                            <span style={{ fontWeight: 700 }}>90-Day Policy Active</span>
+                        </div>
+                        <div style={{ paddingLeft: 26, lineHeight: 1.6 }}>
+                            {penaltyReason} You cannot add another vehicle for <b>{daysRemaining} more day{daysRemaining !== 1 ? 's' : ''}</b>.
+                        </div>
                     </div>
                 )}
 
@@ -239,9 +273,9 @@ export default function VehicleRegister() {
                     <label className="label" style={{ marginBottom: 12 }}>Select Vehicle Type</label>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         {[
-                            { value: 'two_wheeler', label: '2-Wheeler', icon: Bike, desc: 'Bike / Scooter', count: twCount },
-                            { value: 'four_wheeler', label: '4-Wheeler', icon: CarFront, desc: 'Car / SUV', count: fwCount },
-                        ].map(({ value, label, icon: Icon, count }) => {
+                            { value: 'two_wheeler', label: '2-Wheeler', icon: Bike, desc: 'Bike / Scooter', count: twCount, max: maxTW },
+                            { value: 'four_wheeler', label: '4-Wheeler', icon: CarFront, desc: 'Car / SUV', count: fwCount, max: maxFW },
+                        ].map(({ value, label, icon: Icon, count, max }) => {
                             const locked = isLimitReached(value)
                             const isSelected = form.vehicleType === value
                             return (
@@ -264,7 +298,7 @@ export default function VehicleRegister() {
                                         {locked && <Lock size={12} color="#f43f5e" />}
                                     </div>
                                     <div style={{ fontSize: '0.75rem', color: locked ? '#f43f5e' : isSelected ? '#818cf8' : '#64748b', marginTop: 4, fontWeight: 500, width: '100%', textAlign: 'center' }}>
-                                        {value === 'four_wheeler' ? `${count}/1 Registered` : `${count} Registered`}
+                                        {count}/{max} Registered
                                     </div>
                                     {isSelected && <div style={{ position: 'absolute', top: 8, right: 8, width: 6, height: 6, borderRadius: '50%', background: '#6366f1' }} />}
                                 </button>
