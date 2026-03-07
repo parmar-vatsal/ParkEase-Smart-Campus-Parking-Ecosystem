@@ -215,15 +215,19 @@ export default function GuardScanner() {
     }
 
     const switchMode = async (mode) => {
-        if (scanning) {
-            if (scannerMode === 'qr') stopScanner()
-            if (scannerMode === 'anpr') stopAnprCamera()
-        }
+        // Stop current scanner if running
+        if (scannerMode === 'qr') stopScanner()
+        if (scannerMode === 'anpr') stopAnprCamera()
 
         setScanResult(null)
         setManualSearch('')
         setScannerMode(mode)
 
+        // CRITICAL: Wait for the camera hardware to fully release before the next start.
+        // Without this delay the browser reports "Access Denied" even after permission is granted.
+        await new Promise(resolve => setTimeout(resolve, 500))
+
+        // Only auto-start if we were already scanning
         if (scanning) {
             if (mode === 'qr') startScanner()
             if (mode === 'anpr') startAnprCamera()
@@ -249,11 +253,13 @@ export default function GuardScanner() {
             }
 
             // --- OPTIMIZATION: CROP CANVAS ---
-            // The UI shows a targeted box that is 80% width and 30% height, centered.
-            // We only need to process these pixels, ignoring the rest of the camera feed.
-            // This reduces Tesseract processing load by ~76%
+            // The UI target box is 80% width and 55% height of the video, centered.
+            // This height accommodates BOTH:
+            //   - Standard 1-line plates: "GJ 41 ER 4547" (wide, single row)
+            //   - Square 2-line rear plates: "GJ41E" on line 1 / "R4547" on line 2
+            // Width stayed at 80% to avoid unnecessary side padding.
             const cropWidth = videoWidth * 0.8
-            const cropHeight = videoHeight * 0.3
+            const cropHeight = videoHeight * 0.55
             const startX = (videoWidth - cropWidth) / 2
             const startY = (videoHeight - cropHeight) / 2
 
@@ -262,21 +268,26 @@ export default function GuardScanner() {
             canvas.height = cropHeight
 
             const ctx = canvas.getContext('2d')
-            // drawImage(image, sx, sy, sWidth, sHeight, dx, dy, dWidth, dHeight)
             ctx.drawImage(video, startX, startY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight)
-            
-            // Greyscale optimization isn't strictly necessary yet but limits data payload size
-            const imageData = canvas.toDataURL('image/jpeg', 0.8)
+
+            const imageData = canvas.toDataURL('image/jpeg', 0.85)
 
             const { data: { text } } = await tesseractWorkerRef.current.recognize(imageData)
 
-            // Extract alphanumeric characters
-            const rawText = text.replace(/[^A-Z0-9]/gi, '').toUpperCase()
-            
-            // Indian Plate Regex: State(2) + Num(1-2) + Letters(1-3) + Num(4)
-            // We'll use a slightly looser regex to catch dirty plates, but strict enough to avoid random noise
-            // like: GJ05AB1234, MH011234, DL8C1234
-            const plateMatch = rawText.match(/[A-Z]{2}[0-9]{1,2}[A-Z]{0,3}[0-9]{4}/)
+            // --- 2-LINE PLATE SUPPORT ---
+            // For square 2-line plates like:
+            //   Line 1: "GJ41E"
+            //   Line 2: "R4547"
+            // We concatenate all lines after stripping non-alphanumeric, so we get: "GJ41ER4547"
+            const rawText = text
+                .split('\n')
+                .map(line => line.replace(/[^A-Z0-9]/gi, '').toUpperCase().trim())
+                .filter(line => line.length > 0)
+                .join('')  // Join all non-empty lines together
+
+            // Indian Plate Regex: State(2) + Dist(1-2) + Series(1-3) + Num(4)
+            // Examples: GJ05AB1234, GJ41ER4547, MH01AB1234, DL8C1234
+            const plateMatch = rawText.match(/[A-Z]{2}[0-9]{1,2}[A-Z]{1,3}[0-9]{4}/)
 
             if (plateMatch && plateMatch[0].length >= 8) {
                 const detectedPlate = plateMatch[0]
@@ -914,7 +925,7 @@ export default function GuardScanner() {
                                 display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none'
                             }}>
                                 <div style={{
-                                    width: '80%', height: '30%', border: '2px solid rgba(16, 185, 129, 0.5)',
+                                    width: '80%', height: '55%', border: '2px solid rgba(16, 185, 129, 0.5)',
                                     borderRadius: 8, boxShadow: '0 0 0 9999px rgba(0,0,0,0.6)',
                                     position: 'relative', overflow: 'hidden'
                                 }}>
