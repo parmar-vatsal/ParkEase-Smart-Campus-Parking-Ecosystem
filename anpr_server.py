@@ -264,10 +264,11 @@ if __name__ == "__main__":
             )
             for line in tunnel_proc.stdout:
                 line = line.strip()
-                if "localhost.run" in line and "https://" in line:
-                    # Extract the URL from the line
+                # The actual tunnel URL looks like: "abc123.lhr.life tunneled with tls termination, https://abc123.lhr.life"
+                # We specifically match *.lhr.life to avoid the welcome banner's admin.localhost.run link
+                if ".lhr.life" in line and "https://" in line:
                     import re
-                    m = re.search(r"https://[\w\-\.]+\.localhost\.run", line)
+                    m = re.search(r"https://[\w\-]+\.lhr\.life", line)
                     if m:
                         public_url = m.group(0)
                         print("\n" + "=" * 65)
