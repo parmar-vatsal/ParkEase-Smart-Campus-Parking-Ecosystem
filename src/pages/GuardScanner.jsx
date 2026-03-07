@@ -2,11 +2,10 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { Html5Qrcode } from 'html5-qrcode'
-import { createWorker } from 'tesseract.js'  // kept as offline fallback
 import {
     ScanLine, Search, ArrowDownCircle, ArrowUpCircle, User, Car, Phone,
     MapPin, Clock, CheckCircle, XCircle, AlertTriangle, Bike, CarFront,
-    Camera, X, RefreshCw, Check, Bell, Type, Wifi, WifiOff
+    Camera, X, RefreshCw
 } from 'lucide-react'
 
 import VehicleInfo from '../components/guard/VehicleInfo'
@@ -23,7 +22,6 @@ export default function GuardScanner() {
     const [capacity, setCapacity] = useState([])
     const [manualSearch, setManualSearch] = useState('')
     const [searchLoading, setSearchLoading] = useState(false)
-    const [selectedZone, setSelectedZone] = useState('')
     const [zones, setZones] = useState([])
     const [recentLogs, setRecentLogs] = useState([])
     const [pendingWalkins, setPendingWalkins] = useState([])
@@ -32,27 +30,8 @@ export default function GuardScanner() {
     const [lookupResult, setLookupResult] = useState(null)
     const [lookupLoading, setLookupLoading] = useState(false)
     const [overstayGuests, setOverstayGuests] = useState([])
-    const [scannerMode, setScannerMode] = useState('qr') // 'qr' or 'anpr'
-    const [anprLoading, setAnprLoading] = useState(false)
-    const [anprServerOnline, setAnprServerOnline] = useState(null) // null=checking, true=online, false=offline
-    const [anprRawText, setAnprRawText] = useState('') // live OCR feedback
-    // Allow guards to override the server URL (e.g. paste an ngrok HTTPS URL).
-    // Falls back to localhost for same-machine setups.
-    const [anprServerUrl, setAnprServerUrl] = useState(
-        () => localStorage.getItem('parkease_anpr_url') || 'http://127.0.0.1:8000'
-    )
 
-    const PLATE_RE = /^[A-Z]{2}[0-9]{2}[A-Z]{1,2}[0-9]{4}$/
-    // Use anprServerUrl ref so interval callbacks always see the latest value
-    const anprServerUrlRef = useRef(anprServerUrl)
-
-    const videoRef = useRef(null)
-    const streamRef = useRef(null)
-    const canvasRef = useRef(null)
     const html5QrRef = useRef(null)          // QR scanner instance
-    const tesseractWorkerRef = useRef(null)  // Tesseract OCR worker (offline fallback)
-    const anprIntervalRef = useRef(null)     // ANPR polling interval ID
-    const isProcessingRef = useRef(false)    // Lock to prevent overlapping OCR calls
 
     useEffect(() => {
         fetchCapacity()
@@ -60,51 +39,19 @@ export default function GuardScanner() {
         fetchRecentLogs()
         fetchPendingWalkins()
         fetchOverstayGuests()
-        checkAnprServer()   // Check if Python ANPR server is running
         const interval = setInterval(() => {
             fetchCapacity()
             fetchPendingWalkins()
             fetchOverstayGuests()
         }, 30000)
-        // Re-check server status every 15 seconds so the badge stays current
-        const serverCheck = setInterval(checkAnprServer, 15000)
         return () => {
             clearInterval(interval)
-            clearInterval(serverCheck)
             stopScanner()
-            stopAnprCamera()
         }
     }, [])
 
-    // ─── ANPR server health check ─────────────────────────────────────────────
-    const checkAnprServer = async (urlOverride) => {
-        const url = urlOverride ?? anprServerUrlRef.current
-        try {
-            const res = await fetch(`${url}/health`, { signal: AbortSignal.timeout(2000) })
-            setAnprServerOnline(res.ok)
-        } catch {
-            setAnprServerOnline(false)
-        }
-    }
-
-    const configureAnprServer = () => {
-        const current = anprServerUrlRef.current
-        const entered = window.prompt(
-            'Enter your ANPR server URL:\n\n' +
-            '• Same machine:  http://127.0.0.1:8000\n' +
-            '• ngrok tunnel:  https://abc123.ngrok-free.app\n' +
-            '• Cloud server:  https://your-server.railway.app',
-            current
-        )
-        if (entered && entered.trim()) {
-            const clean = entered.trim().replace(/\/$/, '') // strip trailing slash
-            localStorage.setItem('parkease_anpr_url', clean)
-            setAnprServerUrl(clean)
-            anprServerUrlRef.current = clean
-            setAnprServerOnline(null)
-            checkAnprServer(clean)
-        }
-    }
+    // Helper function to get default zone for guests if needed
+    const getDefaultZone = () => zones.length > 0 ? zones[0].id : null;
 
     const fetchPendingWalkins = async () => {
         const { data } = await supabase
@@ -129,11 +76,31 @@ export default function GuardScanner() {
 
     const fetchCapacity = async () => {
         const { data: zonesData } = await supabase.from('parkease_zones').select('*').eq('status', 'active').order('name')
-        const { data: activeLogs } = await supabase.from('parkease_logs').select('zone_id, parkease_vehicles(vehicle_type)').eq('status', 'inside')
+        const { data: activeLogs } = await supabase.from('parkease_logs').select('zone_id, vehicle_id, vehicle_number, parkease_vehicles(vehicle_type)').eq('status', 'inside')
+        
+        // Fetch active guest passes to determine their vehicle types
+        const { data: activeGuests } = await supabase.from('parkease_guest_passes').select('vehicle_number, vehicle_type').eq('status', 'active')
+        const guestTypeMap = {}
+        if (activeGuests) {
+            activeGuests.forEach(g => {
+                guestTypeMap[g.vehicle_number] = g.vehicle_type
+            })
+        }
+
         const rows = []
         for (const zone of (zonesData || [])) {
-            const i2 = (activeLogs || []).filter(l => l.zone_id === zone.id && l.parkease_vehicles?.vehicle_type === 'two_wheeler').length
-            const i4 = (activeLogs || []).filter(l => l.zone_id === zone.id && l.parkease_vehicles?.vehicle_type === 'four_wheeler').length
+            const i2 = (activeLogs || []).filter(l => {
+                if (l.zone_id !== zone.id) return false;
+                if (l.parkease_vehicles?.vehicle_type) return l.parkease_vehicles.vehicle_type === 'two_wheeler';
+                return guestTypeMap[l.vehicle_number] === 'two_wheeler';
+            }).length;
+            
+            const i4 = (activeLogs || []).filter(l => {
+                if (l.zone_id !== zone.id) return false;
+                if (l.parkease_vehicles?.vehicle_type) return l.parkease_vehicles.vehicle_type === 'four_wheeler';
+                return guestTypeMap[l.vehicle_number] === 'four_wheeler';
+            }).length;
+            
             if (zone.capacity_2w_total > 0) { const t = zone.capacity_2w_total + (zone.capacity_2w_overflow || 0); rows.push({ zone_id: zone.id, zone_name: zone.name, vehicle_type: 'two_wheeler', total_slots: t, available_slots: Math.max(0, t - i2), occupancy_percent: t > 0 ? Math.round((i2 / t) * 100) : 0 }) }
             if (zone.capacity_4w_total > 0) { const t = zone.capacity_4w_total + (zone.capacity_4w_overflow || 0); rows.push({ zone_id: zone.id, zone_name: zone.name, vehicle_type: 'four_wheeler', total_slots: t, available_slots: Math.max(0, t - i4), occupancy_percent: t > 0 ? Math.round((i4 / t) * 100) : 0 }) }
         }
@@ -143,7 +110,6 @@ export default function GuardScanner() {
     const fetchZones = async () => {
         const { data } = await supabase.from('parkease_zones').select('*')
         setZones(data || [])
-        if (data?.length > 0 && !selectedZone) setSelectedZone(data[0].id)
     }
 
     const fetchRecentLogs = async () => {
@@ -192,166 +158,6 @@ export default function GuardScanner() {
             html5QrRef.current = null
         }
         setScanning(false)
-    }
-
-    // --- ANPR Methods ---
-
-    const startAnprCamera = async () => {
-        setScannerMode('anpr')
-        setScanning(true)
-        setScanResult(null)
-        setAnprLoading(true)
-
-        try {
-            // First initialize Tesseract so we don't block the UI loop later
-            if (!tesseractWorkerRef.current) {
-                const worker = await createWorker('eng')
-                // Tesseract Optimization: Whitelist Indian Plate Characters + Space
-                await worker.setParameters({
-                    tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ',
-                })
-                tesseractWorkerRef.current = worker
-            }
-
-            const stream = await navigator.mediaDevices.getUserMedia({
-                video: { facingMode: 'environment' }
-            })
-            if (videoRef.current) {
-                videoRef.current.srcObject = stream
-                
-                // Wait for video meta data to load before starting the loop
-                videoRef.current.onloadedmetadata = () => {
-                     // Start continuous polling loop every 800ms for hyper-responsiveness
-                    anprIntervalRef.current = setInterval(captureAndProcessAnprFrame, 800)
-                    setAnprLoading(false)
-                }
-            }
-            streamRef.current = stream
-        } catch (err) {
-            console.error('ANPR Camera Error', err)
-            setScanning(false)
-            setAnprLoading(false)
-            setScannerMode('qr')
-            setScanResult({ error: 'Failed to access camera for ANPR.' })
-            setResultType('error')
-        }
-    }
-
-    const stopAnprCamera = () => {
-        if (anprIntervalRef.current) {
-            clearInterval(anprIntervalRef.current)
-            anprIntervalRef.current = null
-        }
-        isProcessingRef.current = false // Always unlock when stopping
-        if (streamRef.current) {
-            streamRef.current.getTracks().forEach(track => track.stop())
-            streamRef.current = null
-        }
-        if (videoRef.current) {
-            videoRef.current.srcObject = null
-        }
-        setScanning(false)
-        setAnprLoading(false)
-    }
-
-    const switchMode = async (mode) => {
-        // Stop current scanner if running
-        if (scannerMode === 'qr') stopScanner()
-        if (scannerMode === 'anpr') stopAnprCamera()
-
-        setScanResult(null)
-        setManualSearch('')
-        setScannerMode(mode)
-
-        // CRITICAL: Wait for the camera hardware to fully release before the next start.
-        // Without this delay the browser reports "Access Denied" even after permission is granted.
-        await new Promise(resolve => setTimeout(resolve, 500))
-
-        // Only auto-start if we were already scanning
-        if (scanning) {
-            if (mode === 'qr') startScanner()
-            if (mode === 'anpr') startAnprCamera()
-        }
-    }
-
-    const captureAndProcessAnprFrame = async () => {
-        if (!videoRef.current || !canvasRef.current) return
-        if (isProcessingRef.current) return  // Prevent overlapping calls
-
-        isProcessingRef.current = true
-        setAnprLoading(true)
-
-        try {
-            const video = videoRef.current
-            const canvas = canvasRef.current
-            const videoWidth = video.videoWidth || 640
-            const videoHeight = video.videoHeight || 480
-            if (videoWidth === 0) return
-
-            // Send the FULL frame — the Python server does its own multi-region cropping
-            canvas.width = videoWidth
-            canvas.height = videoHeight
-            canvas.getContext('2d').drawImage(video, 0, 0, videoWidth, videoHeight)
-            const b64Frame = canvas.toDataURL('image/jpeg', 0.80)
-
-            let detectedPlate = null
-
-            // ── PATH A: Python YOLOv9 + EasyOCR server ────────────────────────
-            if (anprServerOnline) {
-                try {
-                    const res = await fetch(`${anprServerUrlRef.current}/detect`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ image: b64Frame }),
-                        signal: AbortSignal.timeout(8000)  // 8s — multi-variant OCR takes time
-                    })
-                    if (res.ok) {
-                        const json = await res.json()
-                        // Show live raw text so guard can see what server is reading
-                        if (json.raw) setAnprRawText(json.raw.toUpperCase())
-                        if (json.plate && PLATE_RE.test(json.plate)) {
-                            detectedPlate = json.plate
-                        }
-                    }
-                } catch (err) {
-                    console.warn('ANPR server unreachable, switching to Tesseract fallback')
-                    setAnprServerOnline(false)
-                    setAnprRawText('')
-                }
-            }
-
-            // ── PATH B: Tesseract.js fallback (runs when server is offline) ───
-            if (!detectedPlate) {
-                if (!tesseractWorkerRef.current) {
-                    const worker = await createWorker('eng')
-                    await worker.setParameters({
-                        tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ',
-                    })
-                    tesseractWorkerRef.current = worker
-                }
-                const { data: { text } } = await tesseractWorkerRef.current.recognize(b64Frame)
-                const rawText = text
-                    .split('\n')
-                    .map(l => l.replace(/[^A-Z0-9]/gi, '').toUpperCase())
-                    .filter(l => l.length > 0)
-                    .join('')
-                setAnprRawText(rawText)
-                const m = rawText.match(/[A-Z]{2}[0-9]{1,2}[A-Z]{1,3}[0-9]{4}/)
-                if (m && m[0].length >= 8) detectedPlate = m[0]
-            }
-
-            // ── Trigger check-in / check-out ──────────────────────────────────
-            if (detectedPlate) {
-                setAnprRawText('')
-                stopAnprCamera()
-                setManualSearch(detectedPlate)
-                await handleManualSearch({ preventDefault: () => {} }, detectedPlate, true)
-            }
-
-        } finally {
-            isProcessingRef.current = false
-            setAnprLoading(false)
-        }
     }
 
     // --------------------
@@ -478,8 +284,9 @@ export default function GuardScanner() {
                 return { handled: true }
             }
 
-            if (!selectedZone) {
-                setScanResult({ guestPass: pass, error: 'Please select an Entry Zone first.' })
+            const activeZoneForGuest = getDefaultZone()
+            if (!activeZoneForGuest) {
+                setScanResult({ guestPass: pass, error: 'System Error: No valid Zones available for guest parking.' })
                 setResultType('error')
                 return { handled: true }
             }
@@ -487,8 +294,8 @@ export default function GuardScanner() {
             const stagedScanObj = {
                 guestPass: pass,
                 stagedAction: 'entry',
-                zone: zones.find(z => z.id === selectedZone)?.name || 'Selected Zone',
-                zoneId: selectedZone,
+                zone: zones.find(z => z.id === activeZoneForGuest)?.name || 'Guest Zone',
+                zoneId: activeZoneForGuest,
                 mode
             }
 
@@ -690,33 +497,26 @@ export default function GuardScanner() {
                 return { handled: true }
             }
 
-            if (!selectedZone) {
-                setScanResult({ vehicle, error: 'Please select a parking zone first.' })
+            const targetZoneId = vehicle.allocated_zone_id
+            if (!targetZoneId) {
+                setScanResult({ vehicle, error: 'No Zone Allocated: Cannot allow entry because vehicle has no allocated zone.' })
                 setResultType('error')
                 return { handled: true }
-            }
-
-            let wrongZone = false
-            let allocatedZoneName = null
-            if (vehicle.allocated_zone_id && vehicle.allocated_zone_id !== selectedZone) {
-                wrongZone = true
-                allocatedZoneName = zones.find(z => z.id === vehicle.allocated_zone_id)?.name || 'Another Zone'
             }
 
             const stagedScanObj = {
                 vehicle,
                 stagedAction: 'entry',
-                zone: zones.find(z => z.id === selectedZone)?.name || 'Selected Zone',
-                zoneId: selectedZone,
+                zone: zones.find(z => z.id === targetZoneId)?.name || 'Designated Zone',
+                zoneId: targetZoneId,
                 mode,
-                wrongZone,
-                allocatedZoneName
+                wrongZone: false // Forced parking to allocated zone, so never "wrong"
             }
 
             setScanResult(stagedScanObj)
             setResultType('staged')
 
-            if (autoConfirm && !wrongZone) { // Don't auto-confirm if wrong zone, guard must see the warning
+            if (autoConfirm) {
                 await executeConfirmAction(stagedScanObj, 'entry')
             }
         }
@@ -931,143 +731,25 @@ export default function GuardScanner() {
 
             {activeTab === 'scanner' && (
                 <>
-                    {/* Zone Selection */}
-                    <div style={{ marginBottom: 16 }}>
-                        <label className="label">Entry Zone</label>
-                        <select className="select" value={selectedZone} onChange={(e) => setSelectedZone(e.target.value)}>
-                            {zones.map(z => (
-                                <option key={z.id} value={z.id}>
-                                    {z.name} ({z.vehicle_type === 'two_wheeler' ? '2W' : '4W'})
-                                </option>
-                            ))}
-                        </select>
-                    </div>
-
-                    {/* Mode Selection */}
-                    <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
-                        <button
-                            onClick={() => switchMode('qr')}
-                            className={`btn ${scannerMode === 'qr' ? 'btn-primary' : 'btn-ghost'}`}
-                            style={{ flex: 1, padding: '8px 0', fontSize: '0.85rem' }}
-                        >
-                            <ScanLine size={16} style={{ marginRight: 6 }} /> QR Code
-                        </button>
-                        <button
-                            onClick={() => switchMode('anpr')}
-                            className={`btn ${scannerMode === 'anpr' ? 'btn-primary' : 'btn-ghost'}`}
-                            style={{ flex: 1, padding: '8px 0', fontSize: '0.85rem' }}
-                        >
-                            <Type size={16} style={{ marginRight: 6 }} /> Read Number Plate
-                        </button>
-                    </div>
-
-                    {/* ANPR Server Status Badge */}
-                    {scannerMode === 'anpr' && (
-                        <div style={{ marginBottom: 12 }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px', borderRadius: 10, background: anprServerOnline ? 'rgba(16,185,129,0.1)' : anprServerOnline === null ? 'rgba(100,116,139,0.1)' : 'rgba(245,158,11,0.1)', border: `1px solid ${anprServerOnline ? 'rgba(16,185,129,0.25)' : anprServerOnline === null ? 'rgba(100,116,139,0.2)' : 'rgba(245,158,11,0.25)'}` }}>
-                                {anprServerOnline === null
-                                    ? <><RefreshCw size={14} color="#94a3b8" /><span style={{ fontSize: '0.78rem', color: '#94a3b8' }}>Checking ANPR server…</span></>
-                                    : anprServerOnline
-                                    ? <><Wifi size={14} color="#10b981" /><span style={{ fontSize: '0.78rem', color: '#10b981', fontWeight: 600 }}>YOLOv9 + EasyOCR Online</span><span style={{ fontSize: '0.68rem', color: '#475569', marginLeft: 4 }}>({anprServerUrl.replace('http://127.0.0.1:8000', 'localhost')})</span></>
-                                    : <><WifiOff size={14} color="#f59e0b" /><span style={{ fontSize: '0.78rem', color: '#f59e0b', fontWeight: 600 }}>Server Offline — Tesseract Fallback</span></>
-                                }
-                                <button
-                                    onClick={configureAnprServer}
-                                    style={{ marginLeft: 'auto', fontSize: '0.68rem', color: '#818cf8', background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.2)', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}
-                                >
-                                    ⚙ Configure
-                                </button>
-                            </div>
-                            {!anprServerOnline && anprServerOnline !== null && (
-                                <div style={{ fontSize: '0.7rem', color: '#475569', marginTop: 5, paddingLeft: 4 }}>
-                                    Run <code style={{ background: 'rgba(255,255,255,0.07)', padding: '1px 5px', borderRadius: 4 }}>python anpr_server.py</code> on the guard PC, or use{' '}
-                                    <span style={{ color: '#818cf8' }}>ngrok</span> for remote access → click ⚙ Configure
-                                </div>
-                            )}
-                        </div>
-                    )}
-
                     {/* Scan Button */}
                     <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
                         {!scanning ? (
-                            <button onClick={scannerMode === 'qr' ? () => startScanner('qr-reader') : startAnprCamera} className="btn btn-primary btn-xl" style={{ flex: 1 }}>
-                                <Camera size={22} /> {scannerMode === 'qr' ? 'Start QR Scanner' : 'Start Number Plate Camera'}
+                            <button onClick={() => startScanner('qr-reader')} className="btn btn-primary btn-xl" style={{ flex: 1 }}>
+                                <Camera size={22} /> Start QR Scanner
                             </button>
                         ) : (
-                            <button onClick={scannerMode === 'qr' ? stopScanner : stopAnprCamera} className="btn btn-danger btn-xl" style={{ flex: 1 }}>
+                            <button onClick={stopScanner} className="btn btn-danger btn-xl" style={{ flex: 1 }}>
                                 <X size={22} /> Stop Camera
                             </button>
                         )}
                     </div>
 
                     {/* QR Scanner View */}
-                    {scannerMode === 'qr' && (
-                        <div id="qr-reader" style={{
-                            display: scanning ? 'block' : 'none',
-                            marginBottom: 20, borderRadius: 16, overflow: 'hidden',
-                            border: '2px solid rgba(99, 102, 241, 0.3)',
-                        }} />
-                    )}
-
-                    {/* ANPR Camera View */}
-                    {scannerMode === 'anpr' && scanning && (
-                        <div style={{ marginBottom: 20, position: 'relative', borderRadius: 16, overflow: 'hidden', border: '2px solid rgba(99, 102, 241, 0.3)' }}>
-                            <video ref={videoRef} autoPlay playsInline muted style={{ width: '100%', display: 'block' }} />
-
-                            {/* Guide Frame Overlay */}
-                            <div style={{
-                                position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-                                display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none'
-                            }}>
-                                <div style={{
-                                    width: '80%', height: '55%', border: '2px solid rgba(16, 185, 129, 0.5)',
-                                    borderRadius: 8, boxShadow: '0 0 0 9999px rgba(0,0,0,0.6)',
-                                    position: 'relative', overflow: 'hidden'
-                                }}>
-                                    {/* Animated scan line */}
-                                    <div style={{
-                                        position: 'absolute', top: 0, left: 0, right: 0, height: 2,
-                                        background: '#10b981', boxShadow: '0 0 8px #10b981',
-                                        animation: 'scan 2.5s linear infinite'
-                                    }} />
-                                    <style>
-                                        {`
-                                            @keyframes scan {
-                                                0% { top: 0%; opacity: 0; }
-                                                10% { opacity: 1; }
-                                                90% { opacity: 1; }
-                                                100% { top: 100%; opacity: 0; }
-                                            }
-                                            @keyframes pulse-dot {
-                                                0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
-                                                70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(16, 185, 129, 0); }
-                                                100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
-                                            }
-                                        `}
-                                    </style>
-                                </div>
-                                <div style={{ position: 'absolute', top: 30, display: 'flex', alignItems: 'center', gap: 10, background: 'rgba(0,0,0,0.8)', padding: '10px 16px', borderRadius: 20, border: '1px solid rgba(16, 185, 129, 0.4)' }}>
-                                    <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#10b981', animation: 'pulse-dot 2s infinite' }} />
-                                    <span style={{ color: '#10b981', fontWeight: 600, fontSize: '0.9rem', letterSpacing: '0.05em' }}>
-                                        AUTO-SCANNING ACTIVE
-                                    </span>
-                                </div>
-                                <div style={{ position: 'absolute', bottom: 30, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
-                                    <div style={{ color: 'white', fontWeight: 600, textShadow: '0 2px 4px rgba(0,0,0,0.8)', fontSize: '0.95rem' }}>
-                                        Align license plate within the box
-                                    </div>
-                                    {anprRawText && (
-                                        <div style={{ background: 'rgba(0,0,0,0.7)', border: '1px solid rgba(250, 204, 21, 0.5)', padding: '4px 12px', borderRadius: 6, color: '#facc15', fontSize: '0.85rem', fontFamily: 'monospace', fontWeight: 600 }}>
-                                            Detecting: {anprRawText}
-                                        </div>
-                                    )}
-                                </div>
-                            </div>
-
-                            {/* Hidden canvas for capturing frame */}
-                            <canvas ref={canvasRef} style={{ display: 'none' }} />
-                        </div>
-                    )}
+                    <div id="qr-reader" style={{
+                        display: scanning ? 'block' : 'none',
+                        marginBottom: 20, borderRadius: 16, overflow: 'hidden',
+                        border: '2px solid rgba(99, 102, 241, 0.3)',
+                    }} />
 
                     {/* Manual Search */}
                     <form onSubmit={handleManualSearch} style={{ marginBottom: 20 }}>
@@ -1118,17 +800,7 @@ export default function GuardScanner() {
                                         </div>
                                     </div>
 
-                                    {scanResult.stagedAction === 'entry' && scanResult.wrongZone && (
-                                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 10, color: '#f59e0b', fontSize: '0.85rem', marginBottom: 16 }}>
-                                            <AlertTriangle size={18} style={{ flexShrink: 0, marginTop: 2 }} />
-                                            <div>
-                                                <div style={{ fontWeight: 700, marginBottom: 4 }}>Wrong Zone Warning</div>
-                                                <div style={{ fontSize: '0.75rem', color: '#ebd59b' }}>
-                                                    This vehicle was allocated to <b>{scanResult.allocatedZoneName}</b>. Allowing entry here will reduce overflow capacity and record a violation.
-                                                </div>
-                                            </div>
-                                        </div>
-                                    )}
+                                    {/* Removed wrong zone warning since vehicles only park in allocated zone */}
 
                                     {scanResult.vehicle && <VehicleInfo vehicle={scanResult.vehicle} />}
                                     {scanResult.guestPass && <GuestInfo pass={scanResult.guestPass} action={scanResult.stagedAction} isExpired={scanResult.isExpired} />}
@@ -1318,73 +990,24 @@ export default function GuardScanner() {
                         </div>
                     </form>
 
-                    {/* Quick Action Camera Modes for Lookup */}
-                    <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
-                        <button
-                            onClick={() => switchMode('qr')}
-                            className={`btn ${scannerMode === 'qr' ? 'btn-primary' : 'btn-ghost'}`}
-                            style={{ flex: 1, padding: '8px 0', fontSize: '0.85rem' }}
-                        >
-                            <ScanLine size={16} style={{ marginRight: 6 }} /> QR Code
-                        </button>
-                        <button
-                            onClick={() => switchMode('anpr')}
-                            className={`btn ${scannerMode === 'anpr' ? 'btn-primary' : 'btn-ghost'}`}
-                            style={{ flex: 1, padding: '8px 0', fontSize: '0.85rem' }}
-                        >
-                            <Type size={16} style={{ marginRight: 6 }} /> Read Plate
-                        </button>
-                    </div>
-
                     <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
                         {!scanning ? (
-                            <button onClick={scannerMode === 'qr' ? () => startScanner('qr-reader-lookup') : startAnprCamera} className="btn btn-primary btn-xl" style={{ flex: 1 }}>
-                                <Camera size={22} /> {scannerMode === 'qr' ? 'Start QR Scanner' : 'Start Number Plate Camera'}
+                            <button onClick={() => startScanner('qr-reader-lookup')} className="btn btn-primary btn-xl" style={{ flex: 1 }}>
+                                <Camera size={22} /> Start QR Scanner
                             </button>
                         ) : (
-                            <button onClick={scannerMode === 'qr' ? stopScanner : stopAnprCamera} className="btn btn-danger btn-xl" style={{ flex: 1 }}>
+                            <button onClick={stopScanner} className="btn btn-danger btn-xl" style={{ flex: 1 }}>
                                 <X size={22} /> Stop Camera
                             </button>
                         )}
                     </div>
 
                     {/* QR Scanner View */}
-                    {scannerMode === 'qr' && (
-                        <div id="qr-reader-lookup" style={{
-                            display: scanning ? 'block' : 'none',
-                            marginBottom: 20, borderRadius: 16, overflow: 'hidden',
-                            border: '2px solid rgba(99, 102, 241, 0.3)',
-                        }} />
-                    )}
-
-                    {/* ANPR Camera View */}
-                    {scannerMode === 'anpr' && scanning && (
-                        <div style={{ marginBottom: 20, position: 'relative', borderRadius: 16, overflow: 'hidden', border: '2px solid rgba(99, 102, 241, 0.3)' }}>
-                            <video ref={videoRef} autoPlay playsInline muted style={{ width: '100%', display: 'block' }} />
-
-                            {/* Guide Frame Overlay */}
-                            <div style={{
-                                position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-                                display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none'
-                            }}>
-                                <div style={{
-                                    width: '80%', height: '30%', border: '2px dashed rgba(16, 185, 129, 0.5)',
-                                    borderRadius: 8, boxShadow: '0 0 0 9999px rgba(0,0,0,0.6)'
-                                }} />
-                                <div style={{ position: 'absolute', top: 30, display: 'flex', alignItems: 'center', gap: 10, background: 'rgba(0,0,0,0.8)', padding: '10px 16px', borderRadius: 20, border: '1px solid rgba(16, 185, 129, 0.4)' }}>
-                                    <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#10b981', animation: 'pulse-dot 2s infinite' }} />
-                                    <span style={{ color: '#10b981', fontWeight: 600, fontSize: '0.9rem', letterSpacing: '0.05em' }}>
-                                        AUTO-SCANNING ACTIVE
-                                    </span>
-                                </div>
-                                <div style={{ position: 'absolute', bottom: 30, color: 'white', fontWeight: 600, textShadow: '0 2px 4px rgba(0,0,0,0.8)', fontSize: '0.95rem' }}>
-                                    Align license plate within the box
-                                </div>
-                            </div>
-
-                            <canvas ref={canvasRef} style={{ display: 'none' }} />
-                        </div>
-                    )}
+                    <div id="qr-reader-lookup" style={{
+                        display: scanning ? 'block' : 'none',
+                        marginBottom: 20, borderRadius: 16, overflow: 'hidden',
+                        border: '2px solid rgba(99, 102, 241, 0.3)',
+                    }} />
 
                     {lookupResult && (
                         <div style={{ marginTop: 20 }}>

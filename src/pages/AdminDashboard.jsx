@@ -101,13 +101,35 @@ export default function AdminDashboard() {
 
         const { data: activeLogs } = await supabase
             .from('parkease_logs')
-            .select('zone_id, parkease_vehicles(vehicle_type)')
+            .select('zone_id, vehicle_id, vehicle_number, parkease_vehicles(vehicle_type)')
             .eq('status', 'inside')
+            
+        // Fetch active guest passes to determine their vehicle types
+        const { data: activeGuests } = await supabase
+            .from('parkease_guest_passes')
+            .select('vehicle_number, vehicle_type')
+            .eq('status', 'active')
+            
+        const guestTypeMap = {}
+        if (activeGuests) {
+            activeGuests.forEach(g => {
+                guestTypeMap[g.vehicle_number] = g.vehicle_type
+            })
+        }
 
         const capacityRows = []
         for (const zone of (zonesData || [])) {
-            const inside2w = (activeLogs || []).filter(l => l.zone_id === zone.id && l.parkease_vehicles?.vehicle_type === 'two_wheeler').length
-            const inside4w = (activeLogs || []).filter(l => l.zone_id === zone.id && l.parkease_vehicles?.vehicle_type === 'four_wheeler').length
+            const inside2w = (activeLogs || []).filter(l => {
+                if (l.zone_id !== zone.id) return false;
+                if (l.parkease_vehicles?.vehicle_type) return l.parkease_vehicles.vehicle_type === 'two_wheeler';
+                return guestTypeMap[l.vehicle_number] === 'two_wheeler';
+            }).length;
+            
+            const inside4w = (activeLogs || []).filter(l => {
+                if (l.zone_id !== zone.id) return false;
+                if (l.parkease_vehicles?.vehicle_type) return l.parkease_vehicles.vehicle_type === 'four_wheeler';
+                return guestTypeMap[l.vehicle_number] === 'four_wheeler';
+            }).length;
 
             if (zone.capacity_2w_total > 0) {
                 const total = zone.capacity_2w_total + (zone.capacity_2w_overflow || 0)
