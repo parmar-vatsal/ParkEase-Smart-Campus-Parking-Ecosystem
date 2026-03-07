@@ -6,7 +6,7 @@ import {
     LayoutDashboard, Search, Car, Users, TrendingUp, ArrowDownCircle,
     ArrowUpCircle, Bike, CarFront, Phone, Mail, Building, Hash, Clock,
     CheckCircle, XCircle, Shield, Eye, Ban, MapPin, User, Lock,
-    ChevronRight, AlertCircle, UserPlus, Ticket, Map
+    ChevronRight, AlertCircle, UserPlus, Ticket, Map as MapIcon
 } from 'lucide-react'
 import AddGuardForm from '../components/admin/AddGuardForm'
 import AdminGuestPassTab from '../components/admin/AdminGuestPassTab'
@@ -16,7 +16,7 @@ import AdminZonesTab from '../components/admin/AdminZonesTab'
 // ─── Left sidebar nav items ───────────────────────────────────────────────────
 const NAV_ITEMS = [
     { id: 'overview', label: 'Overview', icon: LayoutDashboard, desc: 'Stats & capacity' },
-    { id: 'zones', label: 'Zones & Areas', icon: Map, desc: 'Manage parking zones' },
+    { id: 'zones', label: 'Zones & Areas', icon: MapIcon, desc: 'Manage parking zones' },
     { id: 'search', label: 'Search & Lookup', icon: Search, desc: 'Find vehicles / users' },
     { id: 'vehicles', label: 'Vehicles', icon: Car, desc: 'All registrations' },
     { id: 'capacity', label: 'Zone Capacity', icon: TrendingUp, desc: 'Live slot status' },
