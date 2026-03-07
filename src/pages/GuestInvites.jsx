@@ -220,7 +220,7 @@ export default function GuestInvites() {
                             <input className="input" placeholder="Rahul Sharma" value={form.guest_name} onChange={(e) => setForm({ ...form, guest_name: e.target.value })} required />
                         </div>
 
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
                             <div>
                                 <label className="label">Guest Email</label>
                                 <input type="email" className="input" placeholder="Email (for QR)" value={form.guest_email} onChange={(e) => setForm({ ...form, guest_email: e.target.value })} required />
@@ -231,7 +231,7 @@ export default function GuestInvites() {
                             </div>
                         </div>
 
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
                             <div>
                                 <label className="label">Vehicle Number <span style={{ color: '#f43f5e' }}>*</span></label>
                                 <input className="input" placeholder="GJ05AB1234" maxLength={10} value={form.vehicle_number} onChange={(e) => setForm({ ...form, vehicle_number: e.target.value.toUpperCase() })} required />
@@ -245,8 +245,8 @@ export default function GuestInvites() {
                             </div>
                         </div>
 
-                        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16, marginBottom: 24 }}>
-                            <div>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+                            <div className="sm:col-span-2">
                                 <label className="label">Purpose of Visit</label>
                                 <select className="input" value={form.purpose} onChange={(e) => setForm({ ...form, purpose: e.target.value })} required>
                                     <option value="" disabled>Select Purpose</option>

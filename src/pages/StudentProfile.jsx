@@ -224,7 +224,7 @@ export default function StudentProfile() {
                         </div>
                     </div>
 
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
                         <div className="input-group">
                             <label className="label">Department</label>
                             <div style={{ position: 'relative' }}>

@@ -41,13 +41,10 @@ export default function Login() {
     }
 
     return (
-        <div style={{
-            minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            padding: 20, position: 'relative',
-        }}>
+        <div className="flex items-center justify-center min-h-screen p-5 relative">
             <div className="animated-bg" />
 
-            <div style={{ width: '100%', maxWidth: 420 }} className="animate-fade-in-up">
+            <div className="w-full max-w-md animate-fade-in-up">
                 {/* Logo */}
                 <div style={{ textAlign: 'center', marginBottom: 40 }}>
                     <div style={{
@@ -67,7 +64,7 @@ export default function Login() {
                 </div>
 
                 {/* Form */}
-                <form onSubmit={handleLogin} className="glass-card" style={{ padding: '32px 28px' }}>
+                <form onSubmit={handleLogin} className="glass-card p-8">
                     {error && (
                         <div style={{
                             padding: '10px 14px', borderRadius: 10, marginBottom: 20,

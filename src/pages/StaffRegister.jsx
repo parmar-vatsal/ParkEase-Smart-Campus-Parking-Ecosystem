@@ -213,7 +213,7 @@ export default function StaffRegister() {
                         </div>
 
                         {/* Two column grid */}
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
                             <div>
                                 <label className="label">Full Name</label>
                                 <div style={{ position: 'relative' }}>
@@ -254,7 +254,7 @@ export default function StaffRegister() {
                             </div>
                         </div>
 
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
                             <div>
                                 <label className="label">Phone</label>
                                 <div style={{ position: 'relative' }}>

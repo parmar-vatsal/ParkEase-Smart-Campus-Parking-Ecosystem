@@ -202,7 +202,7 @@ export default function VehicleRegister() {
                 {/* Vehicle Type Selection */}
                 <div style={{ marginBottom: 28 }}>
                     <label className="label" style={{ marginBottom: 12 }}>Select Vehicle Type</label>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         {[
                             { value: 'two_wheeler', label: '2-Wheeler', icon: Bike, desc: 'Bike / Scooter', count: twCount },
                             { value: 'four_wheeler', label: '4-Wheeler', icon: CarFront, desc: 'Car / SUV', count: fwCount },
@@ -259,7 +259,7 @@ export default function VehicleRegister() {
                 </div>
 
                 {/* Brand & Model */}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 20 }}>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-5">
                     <div>
                         <label className="label">Brand</label>
                         <div style={{ position: 'relative' }}>

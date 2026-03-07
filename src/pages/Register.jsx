@@ -119,13 +119,10 @@ export default function Register() {
     ]
 
     return (
-        <div style={{
-            minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            padding: 20, position: 'relative',
-        }}>
+        <div className="flex items-center justify-center min-h-screen p-5 relative">
             <div className="animated-bg" />
 
-            <div style={{ width: '100%', maxWidth: 480 }} className="animate-fade-in-up">
+            <div className="w-full max-w-lg animate-fade-in-up">
                 {/* Logo */}
                 <div style={{ textAlign: 'center', marginBottom: 32 }}>
                     <div style={{
@@ -214,7 +211,7 @@ export default function Register() {
                         </div>
 
                         {/* Two column grid */}
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
                             <div>
                                 <label className="label">Full Name</label>
                                 <div style={{ position: 'relative' }}>
@@ -255,7 +252,7 @@ export default function Register() {
                             </div>
                         </div>
 
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
                             <div>
                                 <label className="label">Phone</label>
                                 <div style={{ position: 'relative' }}>

@@ -719,7 +719,7 @@ export default function AdminDashboard() {
                                         <div className="capacity-bar" style={{ height: 10, marginBottom: 12 }}>
                                             <div className="capacity-bar-fill" style={{ width: `${pct}%`, background: color }} />
                                         </div>
-                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6, textAlign: 'center', fontSize: '0.72rem' }}>
+                                        <div className="grid grid-cols-3 gap-2 text-center text-[0.72rem]">
                                             <div><div style={{ fontWeight: 700, fontSize: '1rem' }}>{zone.total_slots}</div><div style={{ color: '#64748b' }}>Total</div></div>
                                             <div><div style={{ fontWeight: 700, fontSize: '1rem', color }}>{zone.occupied_slots}</div><div style={{ color: '#64748b' }}>Occupied</div></div>
                                             <div><div style={{ fontWeight: 700, fontSize: '1rem', color: '#10b981' }}>{zone.available_slots}</div><div style={{ color: '#64748b' }}>Free</div></div>

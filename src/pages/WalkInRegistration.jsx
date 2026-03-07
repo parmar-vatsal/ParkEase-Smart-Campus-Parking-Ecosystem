@@ -112,7 +112,7 @@ export default function WalkInRegistration() {
                         <h1 style={{ fontSize: '3rem', fontWeight: 900, letterSpacing: 8, color: '#f1f5f9', margin: 0 }}>{successData.otp}</h1>
                     </div>
 
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, textAlign: 'left', background: 'rgba(0,0,0,0.2)', padding: 16, borderRadius: 12 }}>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-left bg-black/20 p-4 rounded-xl">
                         <div>
                             <span style={{ fontSize: '0.7rem', color: '#64748b' }}>GUEST NAME</span>
                             <div style={{ fontWeight: 600, fontSize: '0.85rem' }}>{successData.name}</div>
