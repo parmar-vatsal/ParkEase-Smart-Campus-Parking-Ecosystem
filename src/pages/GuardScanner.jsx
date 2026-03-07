@@ -77,7 +77,7 @@ export default function GuardScanner() {
     const fetchCapacity = async () => {
         const { data: zonesData } = await supabase.from('parkease_zones').select('*').eq('status', 'active').order('name')
         const { data: activeLogs } = await supabase.from('parkease_logs').select('zone_id, vehicle_id, vehicle_number, parkease_vehicles(vehicle_type)').eq('status', 'inside')
-        
+
         // Fetch active guest passes to determine their vehicle types
         const { data: activeGuests } = await supabase.from('parkease_guest_passes').select('vehicle_number, vehicle_type').eq('status', 'active')
         const guestTypeMap = {}
@@ -94,13 +94,13 @@ export default function GuardScanner() {
                 if (l.parkease_vehicles?.vehicle_type) return l.parkease_vehicles.vehicle_type === 'two_wheeler';
                 return guestTypeMap[l.vehicle_number] === 'two_wheeler';
             }).length;
-            
+
             const i4 = (activeLogs || []).filter(l => {
                 if (l.zone_id !== zone.id) return false;
                 if (l.parkease_vehicles?.vehicle_type) return l.parkease_vehicles.vehicle_type === 'four_wheeler';
                 return guestTypeMap[l.vehicle_number] === 'four_wheeler';
             }).length;
-            
+
             if (zone.capacity_2w_total > 0) { const t = zone.capacity_2w_total + (zone.capacity_2w_overflow || 0); rows.push({ zone_id: zone.id, zone_name: zone.name, vehicle_type: 'two_wheeler', total_slots: t, available_slots: Math.max(0, t - i2), occupancy_percent: t > 0 ? Math.round((i2 / t) * 100) : 0 }) }
             if (zone.capacity_4w_total > 0) { const t = zone.capacity_4w_total + (zone.capacity_4w_overflow || 0); rows.push({ zone_id: zone.id, zone_name: zone.name, vehicle_type: 'four_wheeler', total_slots: t, available_slots: Math.max(0, t - i4), occupancy_percent: t > 0 ? Math.round((i4 / t) * 100) : 0 }) }
         }
@@ -138,11 +138,11 @@ export default function GuardScanner() {
                 { fps: 10, qrbox: { width: 250, height: 250 } },
                 (decodedText) => {
                     handleScan(decodedText)
-                    html5Qr.stop().catch(() => {})
+                    html5Qr.stop().catch(() => { })
                     html5QrRef.current = null
                     setScanning(false)
                 },
-                () => {} // Ignore per-frame QR decode errors
+                () => { } // Ignore per-frame QR decode errors
             )
         } catch (err) {
             console.error('QR Scanner error:', err)
@@ -154,7 +154,7 @@ export default function GuardScanner() {
 
     const stopScanner = () => {
         if (html5QrRef.current) {
-            html5QrRef.current.stop().catch(() => {})
+            html5QrRef.current.stop().catch(() => { })
             html5QrRef.current = null
         }
         setScanning(false)
@@ -458,9 +458,10 @@ export default function GuardScanner() {
         if (activeLogs && activeLogs.length > 0) {
             // STAGED EXIT flow
             const log = activeLogs[0]
-            const entryTime = new Date(log.entry_time)
+            const entryTime = log.entry_time ? new Date(log.entry_time) : new Date()
             const now = new Date()
-            const durationMin = Math.round((now - entryTime) / 60000)
+            let durationMin = Math.round((now - entryTime) / 60000)
+            if (isNaN(durationMin) || durationMin < 0) durationMin = 0
 
             const stagedScanObj = {
                 vehicle,
@@ -540,26 +541,27 @@ export default function GuardScanner() {
                         actual_zone_id: scanObj.zoneId,
                         is_correct_zone: !scanObj.wrongZone,
                         zone_violation: scanObj.wrongZone || false,
+                        entry_time: new Date().toISOString()
                     })
                     if (error) throw error
 
                     // If they parked in the wrong zone, increment their penalty counter
                     if (scanObj.wrongZone) {
                         await supabase.rpc('increment_wrong_zone', { v_id: scanObj.vehicle.id }).catch(() => {
-                           // Silently fail if RPC doesn't exist yet, fallback to a standard JS update if necessary, but standard JS update might hit RLS or race conditions. For now, doing standard update.
-                           supabase
-                             .from('parkease_vehicles')
-                             .select('wrong_zone_parkings')
-                             .eq('id', scanObj.vehicle.id)
-                             .single()
-                             .then(({ data }) => {
-                                 if (data) {
-                                     supabase.from('parkease_vehicles')
-                                     .update({ wrong_zone_parkings: (data.wrong_zone_parkings || 0) + 1 })
-                                     .eq('id', scanObj.vehicle.id)
-                                     .then()
-                                 }
-                             });
+                            // Silently fail if RPC doesn't exist yet, fallback to a standard JS update if necessary, but standard JS update might hit RLS or race conditions. For now, doing standard update.
+                            supabase
+                                .from('parkease_vehicles')
+                                .select('wrong_zone_parkings')
+                                .eq('id', scanObj.vehicle.id)
+                                .single()
+                                .then(({ data }) => {
+                                    if (data) {
+                                        supabase.from('parkease_vehicles')
+                                            .update({ wrong_zone_parkings: (data.wrong_zone_parkings || 0) + 1 })
+                                            .eq('id', scanObj.vehicle.id)
+                                            .then()
+                                    }
+                                });
                         });
                     }
 
@@ -567,29 +569,39 @@ export default function GuardScanner() {
                     setResultType('entry')
                 } else if (scanObj.guestPass) {
                     const pass = scanObj.guestPass
-                    await supabase.from('parkease_guest_passes').update({ status: 'active', entry_time: new Date().toISOString(), entry_count: pass.entry_count + 1 }).eq('id', pass.id)
-                    await supabase.from('parkease_logs').insert({
+                    const { error: guestUpdErr } = await supabase.from('parkease_guest_passes').update({ status: 'active', entry_time: new Date().toISOString(), entry_count: pass.entry_count + 1 }).eq('id', pass.id)
+                    if (guestUpdErr) throw guestUpdErr
+                    
+                    const { error: logInsErr } = await supabase.from('parkease_logs').insert({
                         user_id: pass.sponsor_id,
                         vehicle_number: pass.vehicle_number,
                         zone_id: scanObj.zoneId,
                         guard_id: profile.id,
                         status: 'inside',
                         entry_mode: scanObj.mode,
+                        entry_time: new Date().toISOString()
                     })
+                    if (logInsErr) throw logInsErr
+                    
                     setScanResult({ ...scanObj, action: 'entry' })
                     setResultType('entry')
                 }
             } else if (explicitAction === 'exit') {
                 const now = new Date().toISOString()
                 if (scanObj.vehicle) {
-                    await supabase.from('parkease_logs').update({ exit_time: now, status: 'exited', duration_minutes: scanObj.duration }).eq('id', scanObj.activeLogId)
+                    const { error: logUpdErr } = await supabase.from('parkease_logs').update({ exit_time: now, status: 'exited', duration_minutes: scanObj.duration }).eq('id', scanObj.activeLogId)
+                    if (logUpdErr) throw logUpdErr
+                    
                     setScanResult({ ...scanObj, action: 'exit' })
                     setResultType('exit')
                 } else if (scanObj.guestPass) {
                     const pass = scanObj.guestPass
-                    await supabase.from('parkease_guest_passes').update({ status: 'exited', exit_time: now }).eq('id', pass.id)
+                    const { error: guestUpdErr2 } = await supabase.from('parkease_guest_passes').update({ status: 'exited', exit_time: now }).eq('id', pass.id)
+                    if (guestUpdErr2) throw guestUpdErr2
+                    
                     if (scanObj.activeLogId) {
-                        await supabase.from('parkease_logs').update({ exit_time: now, status: 'exited', duration_minutes: scanObj.duration }).eq('id', scanObj.activeLogId)
+                        const { error: logUpdErr2 } = await supabase.from('parkease_logs').update({ exit_time: now, status: 'exited', duration_minutes: scanObj.duration }).eq('id', scanObj.activeLogId)
+                        if (logUpdErr2) throw logUpdErr2
                     }
                     setScanResult({ ...scanObj, action: 'exit' })
                     setResultType('exit')
