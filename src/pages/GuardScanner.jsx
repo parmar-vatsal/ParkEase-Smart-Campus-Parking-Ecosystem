@@ -110,12 +110,13 @@ export default function GuardScanner() {
         setRecentLogs(data || [])
     }
 
-    const startScanner = async () => {
+    const startScanner = async (elementId = 'qr-reader') => {
         setScanning(true)
         setScanResult(null)
         try {
-            // Create a fresh Html5Qrcode instance every start
-            const html5Qr = new Html5Qrcode('qr-reader')
+            // Create a fresh Html5Qrcode instance bound to the correct DOM element.
+            // The Scanner tab uses 'qr-reader', the Lookup tab uses 'qr-reader-lookup'.
+            const html5Qr = new Html5Qrcode(elementId)
             html5QrRef.current = html5Qr
 
             // IMPORTANT: We always use { facingMode: 'environment' } directly.
@@ -878,7 +879,7 @@ export default function GuardScanner() {
                     {/* Scan Button */}
                     <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
                         {!scanning ? (
-                            <button onClick={scannerMode === 'qr' ? startScanner : startAnprCamera} className="btn btn-primary btn-xl" style={{ flex: 1 }}>
+                            <button onClick={scannerMode === 'qr' ? () => startScanner('qr-reader') : startAnprCamera} className="btn btn-primary btn-xl" style={{ flex: 1 }}>
                                 <Camera size={22} /> {scannerMode === 'qr' ? 'Start QR Scanner' : 'Start Number Plate Camera'}
                             </button>
                         ) : (
@@ -1219,7 +1220,7 @@ export default function GuardScanner() {
 
                     <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
                         {!scanning ? (
-                            <button onClick={scannerMode === 'qr' ? startScanner : startAnprCamera} className="btn btn-primary btn-xl" style={{ flex: 1 }}>
+                            <button onClick={scannerMode === 'qr' ? () => startScanner('qr-reader-lookup') : startAnprCamera} className="btn btn-primary btn-xl" style={{ flex: 1 }}>
                                 <Camera size={22} /> {scannerMode === 'qr' ? 'Start QR Scanner' : 'Start Number Plate Camera'}
                             </button>
                         ) : (
