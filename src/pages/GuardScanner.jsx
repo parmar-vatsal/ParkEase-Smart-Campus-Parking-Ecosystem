@@ -1,12 +1,12 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { Html5Qrcode } from 'html5-qrcode'
-import { createWorker } from 'tesseract.js'
+import { createWorker } from 'tesseract.js'  // kept as offline fallback
 import {
     ScanLine, Search, ArrowDownCircle, ArrowUpCircle, User, Car, Phone,
     MapPin, Clock, CheckCircle, XCircle, AlertTriangle, Bike, CarFront,
-    Camera, X, RefreshCw, Check, Bell, Type
+    Camera, X, RefreshCw, Check, Bell, Type, Wifi, WifiOff
 } from 'lucide-react'
 
 import VehicleInfo from '../components/guard/VehicleInfo'
@@ -34,12 +34,16 @@ export default function GuardScanner() {
     const [overstayGuests, setOverstayGuests] = useState([])
     const [scannerMode, setScannerMode] = useState('qr') // 'qr' or 'anpr'
     const [anprLoading, setAnprLoading] = useState(false)
+    const [anprServerOnline, setAnprServerOnline] = useState(null) // null=checking, true=online, false=offline
+
+    const ANPR_SERVER = 'http://127.0.0.1:8000'
+    const PLATE_RE = /^[A-Z]{2}[0-9]{2}[A-Z]{1,2}[0-9]{4}$/
 
     const videoRef = useRef(null)
     const streamRef = useRef(null)
     const canvasRef = useRef(null)
     const html5QrRef = useRef(null)          // QR scanner instance
-    const tesseractWorkerRef = useRef(null)  // Tesseract OCR worker instance
+    const tesseractWorkerRef = useRef(null)  // Tesseract OCR worker (offline fallback)
     const anprIntervalRef = useRef(null)     // ANPR polling interval ID
     const isProcessingRef = useRef(false)    // Lock to prevent overlapping OCR calls
 
@@ -49,17 +53,31 @@ export default function GuardScanner() {
         fetchRecentLogs()
         fetchPendingWalkins()
         fetchOverstayGuests()
+        checkAnprServer()   // Check if Python ANPR server is running
         const interval = setInterval(() => {
             fetchCapacity()
             fetchPendingWalkins()
             fetchOverstayGuests()
-        }, 30000) // Refresh every 30s so guard sees new overstays
+        }, 30000)
+        // Re-check server status every 15 seconds so the badge stays current
+        const serverCheck = setInterval(checkAnprServer, 15000)
         return () => {
             clearInterval(interval)
+            clearInterval(serverCheck)
             stopScanner()
             stopAnprCamera()
         }
     }, [])
+
+    // ─── ANPR server health check ─────────────────────────────────────────────
+    const checkAnprServer = async () => {
+        try {
+            const res = await fetch(`${ANPR_SERVER}/health`, { signal: AbortSignal.timeout(2000) })
+            setAnprServerOnline(res.ok)
+        } catch {
+            setAnprServerOnline(false)
+        }
+    }
 
     const fetchPendingWalkins = async () => {
         const { data } = await supabase
@@ -230,10 +248,8 @@ export default function GuardScanner() {
     }
 
     const captureAndProcessAnprFrame = async () => {
-        // Use a ref-based lock to avoid stale closures from setInterval.
-        // Using state `anprLoading` directly in the interval would always see `false` (stale closure).
-        if (!videoRef.current || !canvasRef.current || !tesseractWorkerRef.current) return
-        if (isProcessingRef.current) return // Prevent overlapping OCR calls
+        if (!videoRef.current || !canvasRef.current) return
+        if (isProcessingRef.current) return  // Prevent overlapping calls
 
         isProcessingRef.current = true
         setAnprLoading(true)
@@ -241,57 +257,78 @@ export default function GuardScanner() {
         try {
             const video = videoRef.current
             const canvas = canvasRef.current
-
             const videoWidth = video.videoWidth || 640
             const videoHeight = video.videoHeight || 480
-
             if (videoWidth === 0) return
 
-            // --- OPTIMIZATION: CROP CANVAS ---
-            // The UI target box is 80% width and 55% height of the video, centered.
-            // This height accommodates BOTH:
-            //   - Standard 1-line plates: "GJ 41 ER 4547" (wide, single row)
-            //   - Square 2-line rear plates: "GJ41E" on line 1 / "R4547" on line 2
-            const cropWidth = videoWidth * 0.8
-            const cropHeight = videoHeight * 0.55
-            const startX = (videoWidth - cropWidth) / 2
-            const startY = (videoHeight - cropHeight) / 2
+            // Crop to the plate guide box (80% × 55% centred)
+            const cropW = videoWidth * 0.8
+            const cropH = videoHeight * 0.55
+            const startX = (videoWidth - cropW) / 2
+            const startY = (videoHeight - cropH) / 2
+            canvas.width = cropW
+            canvas.height = cropH
+            canvas.getContext('2d').drawImage(video, startX, startY, cropW, cropH, 0, 0, cropW, cropH)
+            const b64Frame = canvas.toDataURL('image/jpeg', 0.85)
 
-            canvas.width = cropWidth
-            canvas.height = cropHeight
+            let detectedPlate = null
 
-            const ctx = canvas.getContext('2d')
-            ctx.drawImage(video, startX, startY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight)
+            // ── PATH A: Python YOLOv9 + EasyOCR server ────────────────────────
+            if (anprServerOnline) {
+                try {
+                    const res = await fetch(`${ANPR_SERVER}/detect`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ image: b64Frame }),
+                        signal: AbortSignal.timeout(3000)
+                    })
+                    if (res.ok) {
+                        const json = await res.json()
+                        if (json.plate && PLATE_RE.test(json.plate)) {
+                            detectedPlate = json.plate
+                        }
+                    }
+                } catch (err) {
+                    // Server went offline mid-session — flip the status
+                    console.warn('ANPR server unreachable, switching to Tesseract fallback')
+                    setAnprServerOnline(false)
+                }
+            }
 
-            const imageData = canvas.toDataURL('image/jpeg', 0.85)
+            // ── PATH B: Tesseract.js fallback (runs when server is offline) ───
+            if (!detectedPlate) {
+                // Lazily initialise Tesseract worker on first use
+                if (!tesseractWorkerRef.current) {
+                    const worker = await createWorker('eng')
+                    await worker.setParameters({
+                        tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ',
+                    })
+                    tesseractWorkerRef.current = worker
+                }
+                const { data: { text } } = await tesseractWorkerRef.current.recognize(b64Frame)
+                // Concatenate lines (handles two-line rear plates)
+                const rawText = text
+                    .split('\n')
+                    .map(l => l.replace(/[^A-Z0-9]/gi, '').toUpperCase())
+                    .filter(l => l.length > 0)
+                    .join('')
+                const m = rawText.match(/[A-Z]{2}[0-9]{1,2}[A-Z]{1,3}[0-9]{4}/)
+                if (m && m[0].length >= 8) detectedPlate = m[0]
+            }
 
-            const { data: { text } } = await tesseractWorkerRef.current.recognize(imageData)
-
-            // --- 2-LINE PLATE SUPPORT ---
-            // Concatenate all non-empty lines so "GJ41E" + "R4547" becomes "GJ41ER4547"
-            const rawText = text
-                .split('\n')
-                .map(line => line.replace(/[^A-Z0-9]/gi, '').toUpperCase().trim())
-                .filter(line => line.length > 0)
-                .join('')
-
-            // Indian Plate Regex: State(2) + Dist(1-2) + Series(1-3) + Num(4)
-            const plateMatch = rawText.match(/[A-Z]{2}[0-9]{1,2}[A-Z]{1,3}[0-9]{4}/)
-
-            if (plateMatch && plateMatch[0].length >= 8) {
-                const detectedPlate = plateMatch[0]
+            // ── Trigger check-in / check-out ──────────────────────────────────
+            if (detectedPlate) {
                 stopAnprCamera()
                 setManualSearch(detectedPlate)
                 await handleManualSearch({ preventDefault: () => {} }, detectedPlate, true)
             }
 
         } catch (err) {
-            console.error('Continuous OCR Error:', err)
+            console.error('ANPR frame error:', err)
         } finally {
             isProcessingRef.current = false
             setAnprLoading(false)
         }
-    }
 
     // --------------------
 
@@ -875,6 +912,18 @@ export default function GuardScanner() {
                             <Type size={16} style={{ marginRight: 6 }} /> Read Number Plate
                         </button>
                     </div>
+
+                    {/* ANPR Server Status Badge */}
+                    {scannerMode === 'anpr' && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, padding: '8px 14px', borderRadius: 10, background: anprServerOnline ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)', border: `1px solid ${anprServerOnline ? 'rgba(16,185,129,0.25)' : 'rgba(245,158,11,0.25)'}` }}>
+                            {anprServerOnline === null
+                                ? <><RefreshCw size={14} color="#94a3b8" style={{ animation: 'spin 1s linear infinite' }} /><span style={{ fontSize: '0.78rem', color: '#94a3b8' }}>Checking ANPR server…</span></>
+                                : anprServerOnline
+                                ? <><Wifi size={14} color="#10b981" /><span style={{ fontSize: '0.78rem', color: '#10b981', fontWeight: 600 }}>YOLOv9 + EasyOCR Server Online</span><span style={{ fontSize: '0.7rem', color: '#64748b', marginLeft: 'auto' }}>Maximum accuracy</span></>
+                                : <><WifiOff size={14} color="#f59e0b" /><span style={{ fontSize: '0.78rem', color: '#f59e0b', fontWeight: 600 }}>Server Offline — Tesseract Fallback</span><span style={{ fontSize: '0.7rem', color: '#64748b', marginLeft: 'auto' }}>Run anpr_server.py for best results</span></>
+                            }
+                        </div>
+                    )}
 
                     {/* Scan Button */}
                     <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
