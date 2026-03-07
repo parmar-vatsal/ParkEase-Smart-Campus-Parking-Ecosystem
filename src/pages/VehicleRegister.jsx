@@ -138,7 +138,19 @@ export default function VehicleRegister() {
             setTimeout(() => navigate('/student/vehicles'), 2000)
         } catch (err) {
             console.error('Registration error:', err)
-            setError(err.message || 'Failed to register vehicle. Please try again.')
+            
+            let displayError = err.message || 'Failed to register vehicle. Please try again.'
+            
+            // Catch Postgres unique constraint exceptions
+            if (displayError.includes('duplicate key value') || String(err.code) === '23505') {
+                if (displayError.includes('vehicle_number')) {
+                    displayError = 'This vehicle number is already registered in the system.'
+                } else {
+                    displayError = 'This vehicle already exists in the system.'
+                }
+            }
+            
+            setError(displayError)
         } finally {
             setLoading(false)
         }

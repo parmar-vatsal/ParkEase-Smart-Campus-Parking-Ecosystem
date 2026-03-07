@@ -87,7 +87,15 @@ export default function WalkInRegistration() {
 
         if (insertErr) {
             console.error("Insert error:", insertErr)
-            setErrorMsg('Error registering. Please try again or see the guard.')
+            
+            let displayError = 'Error registering. Please try again or see the guard.'
+            if (insertErr.message?.includes('duplicate key value') || String(insertErr.code) === '23505') {
+                if (insertErr.message?.includes('vehicle_number')) {
+                    displayError = 'A pass for this vehicle number already exists or is pending.'
+                }
+            }
+            
+            setErrorMsg(displayError)
         } else {
             setSuccessData({ otp, vn, name: form.guest_name })
         }

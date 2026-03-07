@@ -257,7 +257,13 @@ export default function AdminDashboard() {
         }])
 
         if (insertErr) {
-            setAdminPassMsg({ type: 'error', text: 'Error: ' + insertErr.message })
+            let displayError = insertErr.message || 'Failed to generate guest pass.'
+            if (displayError.includes('duplicate key value') || String(insertErr.code) === '23505') {
+                if (displayError.includes('vehicle_number')) {
+                    displayError = 'An active pass for this vehicle number already exists or is pending.'
+                }
+            }
+            setAdminPassMsg({ type: 'error', text: 'Error: ' + displayError })
         } else {
             setAdminPassMsg({ type: 'success', text: `Success! Pass created. OTP: ${otp}` })
             setAdminPassForm({

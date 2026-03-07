@@ -108,7 +108,17 @@ export default function GuestInvites() {
         }])
 
         if (insertErr) {
-            setError('Failed to create guest pass: ' + insertErr.message)
+            let displayError = insertErr.message || 'Failed to generate guest pass.'
+            if (displayError.includes('duplicate key value') || String(insertErr.code) === '23505') {
+                if (displayError.includes('vehicle_number')) {
+                    displayError = 'A guest pass for this vehicle number is already active.'
+                } else if (displayError.includes('guest_email')) {
+                    displayError = 'A guest pass for this email is already active.'
+                } else {
+                    displayError = 'This guest pass already exists in the system.'
+                }
+            }
+            setError(displayError)
             setSubmitting(false)
             return
         }
