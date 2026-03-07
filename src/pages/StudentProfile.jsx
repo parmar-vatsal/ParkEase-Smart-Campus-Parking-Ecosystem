@@ -15,7 +15,7 @@ export default function StudentProfile() {
         phone: '',
         department: '',
         semester: '',
-        photo_url: ''
+        profile_photo: ''
     })
     const [newPhoto, setNewPhoto] = useState(null)
     const [newPhotoPreview, setNewPhotoPreview] = useState(null)
@@ -45,7 +45,7 @@ export default function StudentProfile() {
                     phone: data.phone || '',
                     department: data.department || '',
                     semester: data.semester || '',
-                    photo_url: data.photo_url || ''
+                    profile_photo: data.profile_photo || ''
                 })
             }
         } catch (err) {
@@ -86,7 +86,7 @@ export default function StudentProfile() {
             const { data: { user } } = await supabase.auth.getUser()
             if (!user) throw new Error("Not authenticated")
 
-            let photoUrl = profile.photo_url
+            let photoUrl = profile.profile_photo
 
             // Upload new photo if selected
             if (newPhoto) {
@@ -94,7 +94,7 @@ export default function StudentProfile() {
                 const fileName = `${user.id}_${Date.now()}.${fileExt}`
 
                 const { error: uploadError } = await supabase.storage
-                    .from('profiles') // Ensure this bucket exists and is public
+                    .from('avatars') // Ensure this bucket exists and is public
                     .upload(fileName, newPhoto, { upsert: true })
 
                 if (uploadError) {
@@ -102,7 +102,7 @@ export default function StudentProfile() {
                 }
 
                 const { data: publicUrlData } = supabase.storage
-                    .from('profiles')
+                    .from('avatars')
                     .getPublicUrl(fileName)
 
                 photoUrl = publicUrlData.publicUrl
@@ -116,14 +116,14 @@ export default function StudentProfile() {
                     phone: profile.phone,
                     department: profile.department,
                     semester: profile.semester,
-                    photo_url: photoUrl
+                    profile_photo: photoUrl
                 })
                 .eq('id', user.id)
 
             if (updateError) throw updateError
 
             setSuccess('Profile updated successfully!')
-            setProfile(prev => ({ ...prev, photo_url: photoUrl }))
+            setProfile(prev => ({ ...prev, profile_photo: photoUrl }))
             setNewPhoto(null) // Clear pending photo
 
             // Clean up preview URL
@@ -161,9 +161,9 @@ export default function StudentProfile() {
                         background: 'rgba(255,255,255,0.05)', display: 'flex', alignItems: 'center', justifyContent: 'center',
                         position: 'relative', overflow: 'hidden', border: '2px solid rgba(129, 140, 248, 0.3)'
                     }}>
-                        {(newPhotoPreview || profile.photo_url) ? (
+                        {(newPhotoPreview || profile.profile_photo) ? (
                             <img
-                                src={newPhotoPreview || profile.photo_url}
+                                src={newPhotoPreview || profile.profile_photo}
                                 alt="Profile"
                                 style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                             />
