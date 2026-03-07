@@ -237,38 +237,69 @@ async def health():
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    import subprocess
     import threading
+    import time
 
-    # ── Try to create a free public ngrok tunnel automatically ────────────────
+    # ── Free public tunnel via localhost.run (no account needed!) ─────────────
+    # Uses SSH which is built into Windows 10 / macOS / Linux.
+    # No signup, no installation — just works.
+    tunnel_proc = None
     public_url = None
+
+    def start_tunnel():
+        """
+        Starts `ssh -R 80:localhost:8000 nokey@localhost.run` in a subprocess.
+        Reads stdout until the public URL is printed, then shows it.
+        localhost.run outputs a line like:
+            tunneled with tls termination, https://abc123.localhost.run
+        """
+        global public_url, tunnel_proc
+        try:
+            tunnel_proc = subprocess.Popen(
+                ["ssh", "-o", "StrictHostKeyChecking=no",
+                 "-R", "80:localhost:8000", "nokey@localhost.run"],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, bufsize=1
+            )
+            for line in tunnel_proc.stdout:
+                line = line.strip()
+                if "localhost.run" in line and "https://" in line:
+                    # Extract the URL from the line
+                    import re
+                    m = re.search(r"https://[\w\-\.]+\.localhost\.run", line)
+                    if m:
+                        public_url = m.group(0)
+                        print("\n" + "=" * 65)
+                        print("  🚀  ParkEase ANPR Server — PUBLIC URL READY")
+                        print("=" * 65)
+                        print(f"\n  ✅  Your public HTTPS URL:\n")
+                        print(f"      {public_url}\n")
+                        print("  ► Open the Guard Scanner on Vercel")
+                        print("  ► Switch to 'Read Number Plate' mode")
+                        print("  ► Click  ⚙ Configure  and paste the URL above")
+                        print("\n" + "=" * 65 + "\n")
+        except FileNotFoundError:
+            print("\n[INFO] SSH not found — tunnel skipped.")
+            print("[INFO] Server running on http://127.0.0.1:8000 (local only)\n")
+        except Exception as e:
+            print(f"\n[INFO] Tunnel error: {e}\n")
+
+    # Start tunnel in a background thread so it doesn't block the server
+    tunnel_thread = threading.Thread(target=start_tunnel, daemon=True)
+    tunnel_thread.start()
+
+    # Give the tunnel 2 seconds to print its URL before uvicorn log floods stdout
+    time.sleep(2)
+
     try:
-        from pyngrok import ngrok, conf
-
-        # Optional: set your ngrok authtoken here if you have one (free signup at ngrok.com)
-        # conf.get_default().auth_token = "YOUR_NGROK_AUTHTOKEN"
-
-        tunnel = ngrok.connect(8000, "http")
-        public_url = tunnel.public_url
-
-        print("\n" + "=" * 65)
-        print("  🚀  ParkEase ANPR Server — PUBLIC URL READY")
-        print("=" * 65)
-        print(f"\n  ✅  Your public HTTPS URL:\n")
-        print(f"      {public_url}\n")
-        print("  ► Open the Guard Scanner on Vercel")
-        print("  ► Switch to 'Read Number Plate' mode")
-        print("  ► Click  ⚙ Configure  and paste the URL above")
-        print("\n" + "=" * 65 + "\n")
-
-    except Exception as ngrok_err:
-        print(f"\n[INFO] ngrok tunnel not started: {ngrok_err}")
-        print("[INFO] Server will run on http://127.0.0.1:8000 (local only)")
-        print("[INFO] For remote access, sign up free at https://ngrok.com\n")
-
-    uvicorn.run(
-        "anpr_server:app",
-        host="127.0.0.1",
-        port=8000,
-        reload=False,
-        log_level="info",
-    )
+        uvicorn.run(
+            "anpr_server:app",
+            host="127.0.0.1",
+            port=8000,
+            reload=False,
+            log_level="info",
+        )
+    finally:
+        if tunnel_proc:
+            tunnel_proc.terminate()
