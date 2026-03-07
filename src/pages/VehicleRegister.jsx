@@ -38,7 +38,7 @@ export default function VehicleRegister() {
     const totalCount = twCount + fwCount
 
     const hasEmergencyPass = profile?.emergency_vehicle_until && new Date(profile.emergency_vehicle_until) > new Date()
-    const maxTotalVehicles = hasEmergencyPass ? 3 : 2
+    const maxTotalVehicles = hasEmergencyPass ? 3 : 1
 
     const isLimitReached = (type) => {
         if (totalCount >= maxTotalVehicles) return true
@@ -61,7 +61,7 @@ export default function VehicleRegister() {
         setError('')
 
         if (isLimitReached(form.vehicleType)) {
-            setError(`Registration limit reached. Total allowed: ${maxTotalVehicles}. (Max 1 4-Wheeler).`)
+            setError(`Registration limit reached. Total allowed: ${maxTotalVehicles}. Please remove an existing vehicle first.`)
             setLoading(false)
             return
         }

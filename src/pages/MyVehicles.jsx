@@ -77,6 +77,17 @@ export default function MyVehicles() {
 
     const handleDelete = async (id) => {
         if (!confirm('Are you sure you want to delete this vehicle?')) return
+
+        let daysSinceDelete = 90
+        if (profile.last_vehicle_deleted_at) {
+            daysSinceDelete = Math.floor((new Date() - new Date(profile.last_vehicle_deleted_at)) / (1000 * 60 * 60 * 24))
+        }
+        
+        if (daysSinceDelete < 90) {
+            alert(`You can only delete one vehicle every 90 days. Please wait ${90 - daysSinceDelete} more days.`)
+            return
+        }
+
         setActionLoading(true)
 
         // Use .select() so we can check if it actually deleted a row.
@@ -289,8 +300,8 @@ export default function MyVehicles() {
 
                                     if (!canDelete) {
                                         return (
-                                            <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid rgba(255,255,255,0.05)', textAlign: 'center', fontSize: '0.75rem', color: '#f59e0b' }}>
-                                                Delete option locked for {90 - daysSinceDelete} days
+                                            <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid rgba(255,255,255,0.05)', textAlign: 'center', fontSize: '0.75rem', color: '#f43f5e' }}>
+                                                🔒 Deletion locked. Try again in {90 - daysSinceDelete} days. (1 vehicle change per 90 days).
                                             </div>
                                         )
                                     }
