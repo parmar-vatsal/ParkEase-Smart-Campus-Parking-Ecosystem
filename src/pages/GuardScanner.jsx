@@ -35,9 +35,15 @@ export default function GuardScanner() {
     const [scannerMode, setScannerMode] = useState('qr') // 'qr' or 'anpr'
     const [anprLoading, setAnprLoading] = useState(false)
     const [anprServerOnline, setAnprServerOnline] = useState(null) // null=checking, true=online, false=offline
+    // Allow guards to override the server URL (e.g. paste an ngrok HTTPS URL).
+    // Falls back to localhost for same-machine setups.
+    const [anprServerUrl, setAnprServerUrl] = useState(
+        () => localStorage.getItem('parkease_anpr_url') || 'http://127.0.0.1:8000'
+    )
 
-    const ANPR_SERVER = 'http://127.0.0.1:8000'
     const PLATE_RE = /^[A-Z]{2}[0-9]{2}[A-Z]{1,2}[0-9]{4}$/
+    // Use anprServerUrl ref so interval callbacks always see the latest value
+    const anprServerUrlRef = useRef(anprServerUrl)
 
     const videoRef = useRef(null)
     const streamRef = useRef(null)
@@ -70,12 +76,32 @@ export default function GuardScanner() {
     }, [])
 
     // ─── ANPR server health check ─────────────────────────────────────────────
-    const checkAnprServer = async () => {
+    const checkAnprServer = async (urlOverride) => {
+        const url = urlOverride ?? anprServerUrlRef.current
         try {
-            const res = await fetch(`${ANPR_SERVER}/health`, { signal: AbortSignal.timeout(2000) })
+            const res = await fetch(`${url}/health`, { signal: AbortSignal.timeout(2000) })
             setAnprServerOnline(res.ok)
         } catch {
             setAnprServerOnline(false)
+        }
+    }
+
+    const configureAnprServer = () => {
+        const current = anprServerUrlRef.current
+        const entered = window.prompt(
+            'Enter your ANPR server URL:\n\n' +
+            '• Same machine:  http://127.0.0.1:8000\n' +
+            '• ngrok tunnel:  https://abc123.ngrok-free.app\n' +
+            '• Cloud server:  https://your-server.railway.app',
+            current
+        )
+        if (entered && entered.trim()) {
+            const clean = entered.trim().replace(/\/$/, '') // strip trailing slash
+            localStorage.setItem('parkease_anpr_url', clean)
+            setAnprServerUrl(clean)
+            anprServerUrlRef.current = clean
+            setAnprServerOnline(null)
+            checkAnprServer(clean)
         }
     }
 
@@ -276,7 +302,7 @@ export default function GuardScanner() {
             // ── PATH A: Python YOLOv9 + EasyOCR server ────────────────────────
             if (anprServerOnline) {
                 try {
-                    const res = await fetch(`${ANPR_SERVER}/detect`, {
+                    const res = await fetch(`${anprServerUrlRef.current}/detect`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ image: b64Frame }),
@@ -323,12 +349,11 @@ export default function GuardScanner() {
                 await handleManualSearch({ preventDefault: () => {} }, detectedPlate, true)
             }
 
-        } catch (err) {
-            console.error('ANPR frame error:', err)
         } finally {
             isProcessingRef.current = false
             setAnprLoading(false)
         }
+    }
 
     // --------------------
 
@@ -915,13 +940,27 @@ export default function GuardScanner() {
 
                     {/* ANPR Server Status Badge */}
                     {scannerMode === 'anpr' && (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, padding: '8px 14px', borderRadius: 10, background: anprServerOnline ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)', border: `1px solid ${anprServerOnline ? 'rgba(16,185,129,0.25)' : 'rgba(245,158,11,0.25)'}` }}>
-                            {anprServerOnline === null
-                                ? <><RefreshCw size={14} color="#94a3b8" style={{ animation: 'spin 1s linear infinite' }} /><span style={{ fontSize: '0.78rem', color: '#94a3b8' }}>Checking ANPR server…</span></>
-                                : anprServerOnline
-                                ? <><Wifi size={14} color="#10b981" /><span style={{ fontSize: '0.78rem', color: '#10b981', fontWeight: 600 }}>YOLOv9 + EasyOCR Server Online</span><span style={{ fontSize: '0.7rem', color: '#64748b', marginLeft: 'auto' }}>Maximum accuracy</span></>
-                                : <><WifiOff size={14} color="#f59e0b" /><span style={{ fontSize: '0.78rem', color: '#f59e0b', fontWeight: 600 }}>Server Offline — Tesseract Fallback</span><span style={{ fontSize: '0.7rem', color: '#64748b', marginLeft: 'auto' }}>Run anpr_server.py for best results</span></>
-                            }
+                        <div style={{ marginBottom: 12 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px', borderRadius: 10, background: anprServerOnline ? 'rgba(16,185,129,0.1)' : anprServerOnline === null ? 'rgba(100,116,139,0.1)' : 'rgba(245,158,11,0.1)', border: `1px solid ${anprServerOnline ? 'rgba(16,185,129,0.25)' : anprServerOnline === null ? 'rgba(100,116,139,0.2)' : 'rgba(245,158,11,0.25)'}` }}>
+                                {anprServerOnline === null
+                                    ? <><RefreshCw size={14} color="#94a3b8" /><span style={{ fontSize: '0.78rem', color: '#94a3b8' }}>Checking ANPR server…</span></>
+                                    : anprServerOnline
+                                    ? <><Wifi size={14} color="#10b981" /><span style={{ fontSize: '0.78rem', color: '#10b981', fontWeight: 600 }}>YOLOv9 + EasyOCR Online</span><span style={{ fontSize: '0.68rem', color: '#475569', marginLeft: 4 }}>({anprServerUrl.replace('http://127.0.0.1:8000', 'localhost')})</span></>
+                                    : <><WifiOff size={14} color="#f59e0b" /><span style={{ fontSize: '0.78rem', color: '#f59e0b', fontWeight: 600 }}>Server Offline — Tesseract Fallback</span></>
+                                }
+                                <button
+                                    onClick={configureAnprServer}
+                                    style={{ marginLeft: 'auto', fontSize: '0.68rem', color: '#818cf8', background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.2)', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}
+                                >
+                                    ⚙ Configure
+                                </button>
+                            </div>
+                            {!anprServerOnline && anprServerOnline !== null && (
+                                <div style={{ fontSize: '0.7rem', color: '#475569', marginTop: 5, paddingLeft: 4 }}>
+                                    Run <code style={{ background: 'rgba(255,255,255,0.07)', padding: '1px 5px', borderRadius: 4 }}>python anpr_server.py</code> on the guard PC, or use{' '}
+                                    <span style={{ color: '#818cf8' }}>ngrok</span> for remote access → click ⚙ Configure
+                                </div>
+                            )}
                         </div>
                     )}
 
