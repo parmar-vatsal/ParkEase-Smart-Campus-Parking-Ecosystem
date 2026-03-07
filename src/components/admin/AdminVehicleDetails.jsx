@@ -1,5 +1,5 @@
 import React from 'react'
-import { Bike, CarFront, Phone, Mail, Hash, Building, CheckCircle, Ban, Clock, ArrowDownCircle, ArrowUpCircle } from 'lucide-react'
+import { Bike, CarFront, Phone, Mail, Hash, Building, CheckCircle, Ban, Clock, ArrowDownCircle, ArrowUpCircle, AlertTriangle } from 'lucide-react'
 
 export default function AdminVehicleDetails({
     selectedVehicle, setSelectedVehicle, vehicleHistory, formatDuration, updateVehicleStatus, grantEmergencyPass
@@ -23,6 +23,11 @@ export default function AdminVehicleDetails({
                     <span className={`badge ${selectedVehicle.status === 'active' ? 'badge-success' : selectedVehicle.status === 'pending_approval' ? 'badge-warning' : 'badge-danger'}`}>
                         {selectedVehicle.status === 'pending_approval' ? 'Pending Approval' : selectedVehicle.status}
                     </span>
+                    {(selectedVehicle.wrong_zone_parkings > 0) && (
+                        <div style={{ marginTop: 8, fontSize: '0.75rem', color: '#f59e0b', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 6, background: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.2)', padding: '4px 8px', borderRadius: 6, marginLeft: 8 }}>
+                            <AlertTriangle size={12} /> {selectedVehicle.wrong_zone_parkings} Violation{selectedVehicle.wrong_zone_parkings !== 1 ? 's' : ''}
+                        </div>
+                    )}
                 </div>
 
                 {selectedVehicle.parkease_profiles && (
@@ -93,6 +98,7 @@ export default function AdminVehicleDetails({
                                 <span style={{ color: '#64748b' }}>{new Date(log.entry_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}{log.exit_time && ` → ${new Date(log.exit_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`}</span>
                             </div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                {log.zone_violation && <span style={{ color: '#f59e0b', fontSize: '0.6rem', fontWeight: 700, background: 'rgba(245,158,11,0.1)', padding: '2px 4px', borderRadius: 4 }}>WRONG ZONE</span>}
                                 {log.parkease_zones?.name && <span style={{ color: '#64748b', fontSize: '0.7rem' }}>{log.parkease_zones.name}</span>}
                                 <span className={`badge ${log.status === 'inside' ? 'badge-success' : 'badge-info'}`} style={{ fontSize: '0.6rem' }}>
                                     {log.status === 'inside' ? 'Inside' : formatDuration(log.duration_minutes)}

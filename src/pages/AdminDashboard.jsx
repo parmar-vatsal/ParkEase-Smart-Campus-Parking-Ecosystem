@@ -6,7 +6,7 @@ import {
     LayoutDashboard, Search, Car, Users, TrendingUp, ArrowDownCircle,
     ArrowUpCircle, Bike, CarFront, Phone, Mail, Building, Hash, Clock,
     CheckCircle, XCircle, Shield, Eye, Ban, MapPin, User, Lock,
-    ChevronRight, AlertCircle, UserPlus, Ticket, Map as MapIcon
+    ChevronRight, AlertCircle, AlertTriangle, UserPlus, Ticket, Map as MapIcon
 } from 'lucide-react'
 import AddGuardForm from '../components/admin/AddGuardForm'
 import AdminGuestPassTab from '../components/admin/AdminGuestPassTab'
@@ -656,7 +656,14 @@ export default function AdminDashboard() {
                                                     <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                                                         {v.vehicle_type === 'two_wheeler' ? <Bike size={18} color="#818cf8" /> : <CarFront size={18} color="#f59e0b" />}
                                                         <div>
-                                                            <div style={{ fontWeight: 700, fontSize: '0.88rem', letterSpacing: '0.04em' }}>{v.vehicle_number}</div>
+                                                            <div style={{ fontWeight: 700, fontSize: '0.88rem', letterSpacing: '0.04em', display: 'flex', alignItems: 'center' }}>
+                                                                {v.vehicle_number}
+                                                                {(v.wrong_zone_parkings > 0) && (
+                                                                    <span style={{ marginLeft: 8, color: '#f59e0b', fontSize: '0.65rem', background: 'rgba(245, 158, 11, 0.15)', padding: '2px 6px', borderRadius: 4, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                                                                        <AlertTriangle size={10} /> {v.wrong_zone_parkings} Violation{v.wrong_zone_parkings !== 1 ? 's' : ''}
+                                                                    </span>
+                                                                )}
+                                                            </div>
                                                             <div style={{ fontSize: '0.72rem', color: '#94a3b8' }}>
                                                                 {v.parkease_profiles?.full_name}
                                                                 {v.parkease_profiles?.enrollment_id && ` • ${v.parkease_profiles.enrollment_id}`}

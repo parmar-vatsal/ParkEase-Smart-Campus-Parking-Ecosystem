@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { QRCodeSVG } from 'qrcode.react'
-import { Car, Download, Bike, CarFront, Clock, CheckCircle, XCircle, Trash2 } from 'lucide-react'
+import { Car, Download, Bike, CarFront, Clock, CheckCircle, XCircle, Trash2, MapPin } from 'lucide-react'
 
 export default function MyVehicles() {
     const { profile } = useAuth()
@@ -27,7 +27,7 @@ export default function MyVehicles() {
             setLoading(true)
             const { data, error } = await supabase
                 .from('parkease_vehicles')
-                .select('*')
+                .select('*, parkease_zones(name)')
                 .eq('owner_id', profile.id)
                 .order('created_at', { ascending: false })
 
@@ -311,8 +311,15 @@ export default function MyVehicles() {
 
                                 {/* Details instead of QR Code */}
                                 {vehicle.status === 'active' && (
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 16, color: '#10b981', fontSize: '0.8rem', fontWeight: 600 }}>
-                                        <CheckCircle size={14} /> Linked to your ID QR
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
+                                        {vehicle.parkease_zones?.name && (
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#f59e0b', fontSize: '0.8rem', fontWeight: 600, background: 'rgba(245, 158, 11, 0.1)', padding: '6px 10px', borderRadius: 8 }}>
+                                                <MapPin size={14} /> Allocated Zone: {vehicle.parkease_zones.name}
+                                            </div>
+                                        )}
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#10b981', fontSize: '0.8rem', fontWeight: 600 }}>
+                                            <CheckCircle size={14} /> Linked to your Campus Digital ID
+                                        </div>
                                     </div>
                                 )}
 

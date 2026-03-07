@@ -736,8 +736,32 @@ export default function GuardScanner() {
                         guard_id: profile.id,
                         status: 'inside',
                         entry_mode: scanObj.mode,
+                        allocated_zone_id: scanObj.vehicle.allocated_zone_id || null,
+                        actual_zone_id: scanObj.zoneId,
+                        is_correct_zone: !scanObj.wrongZone,
+                        zone_violation: scanObj.wrongZone || false,
                     })
                     if (error) throw error
+
+                    // If they parked in the wrong zone, increment their penalty counter
+                    if (scanObj.wrongZone) {
+                        await supabase.rpc('increment_wrong_zone', { v_id: scanObj.vehicle.id }).catch(() => {
+                           // Silently fail if RPC doesn't exist yet, fallback to a standard JS update if necessary, but standard JS update might hit RLS or race conditions. For now, doing standard update.
+                           supabase
+                             .from('parkease_vehicles')
+                             .select('wrong_zone_parkings')
+                             .eq('id', scanObj.vehicle.id)
+                             .single()
+                             .then(({ data }) => {
+                                 if (data) {
+                                     supabase.from('parkease_vehicles')
+                                     .update({ wrong_zone_parkings: (data.wrong_zone_parkings || 0) + 1 })
+                                     .eq('id', scanObj.vehicle.id)
+                                     .then()
+                                 }
+                             });
+                        });
+                    }
 
                     setScanResult({ ...scanObj, action: 'entry' })
                     setResultType('entry')
@@ -1100,7 +1124,7 @@ export default function GuardScanner() {
                                             <div>
                                                 <div style={{ fontWeight: 700, marginBottom: 4 }}>Wrong Zone Warning</div>
                                                 <div style={{ fontSize: '0.75rem', color: '#ebd59b' }}>
-                                                    This vehicle was allocated to <b>{scanResult.allocatedZoneName}</b>. Allowing entry here will reduce overflow capacity.
+                                                    This vehicle was allocated to <b>{scanResult.allocatedZoneName}</b>. Allowing entry here will reduce overflow capacity and record a violation.
                                                 </div>
                                             </div>
                                         </div>

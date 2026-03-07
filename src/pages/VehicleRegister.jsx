@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
-import { Car, Bike, CarFront, Palette, Type, Hash, CheckCircle, ArrowLeft, Lock } from 'lucide-react'
+import { Car, Bike, CarFront, Palette, Type, Hash, CheckCircle, ArrowLeft, Lock, MapPin, AlertCircle } from 'lucide-react'
 
 export default function VehicleRegister() {
     const { profile } = useAuth()
@@ -112,42 +112,73 @@ export default function VehicleRegister() {
             // ─── Zone Allocation Logic ─────────────────────────────────────────
             // Strategy:
             // 1. Find zones mapped to the student's department, ordered by priority DESC.
-            // 2. Among those, pick the first zone that has capacity for the vehicle type.
-            // 3. If nothing matches, fall back to any active zone that supports the vehicle type.
+            // 2. Fetch current occupancy of these zones from parkease_logs.
+            // 3. Among those, pick the first zone that has available capacity for the vehicle type.
+            // 4. If nothing matches, fall back to any active zone with capacity.
             let allocatedZoneId = null;
+            let allocatedZoneName = null;
+            let allocatedZoneBuilding = null;
+            let allocatedZoneGates = [];
 
             if (profile?.department) {
                 // Fetch all mapped zone IDs for student's department, highest priority first
                 const { data: deptZones } = await supabase
                     .from('parkease_zone_departments')
-                    .select('zone_id, priority, parkease_zones(id, status, capacity_2w_total, capacity_4w_total)')
+                    .select('zone_id, priority, parkease_zones(id, name, status, nearest_building, gates, capacity_2w_total, capacity_4w_total)')
                     .eq('department_code', profile.department)
-                    .order('priority', { ascending: false })  // Highest priority first
+                    .order('priority', { ascending: false })
 
                 if (deptZones && deptZones.length > 0) {
-                    // Pick first zone that is active AND supports the vehicle type
                     const capacityField = form.vehicleType === 'two_wheeler' ? 'capacity_2w_total' : 'capacity_4w_total'
-                    const matchingZone = deptZones.find(d =>
-                        d.parkease_zones?.status === 'active' &&
-                        (d.parkease_zones?.[capacityField] || 0) > 0
-                    )
+                    
+                    // Fetch current active logs to compute occupancy
+                    const zoneIds = deptZones.map(dz => dz.zone_id)
+                    const { data: activeLogs } = await supabase
+                        .from('parkease_logs')
+                        .select('zone_id')
+                        .in('zone_id', zoneIds)
+                        .eq('status', 'inside')
+                        .eq('vehicle_type', form.vehicleType) // ONLY count vehicles of the same type
+
+                    // Compute occupancy map
+                    const occupancyMap = {}
+                    ;(activeLogs || []).forEach(log => {
+                        occupancyMap[log.zone_id] = (occupancyMap[log.zone_id] || 0) + 1
+                    })
+
+                    // Pick first zone that is active AND has available space
+                    const matchingZone = deptZones.find(d => {
+                        const zone = d.parkease_zones;
+                        if (zone?.status !== 'active') return false;
+                        const totalCap = zone[capacityField] || 0;
+                        if (totalCap <= 0) return false;
+                        const occupied = occupancyMap[zone.id] || 0;
+                        return (totalCap - occupied) > 0;
+                    })
+
                     if (matchingZone) {
                         allocatedZoneId = matchingZone.zone_id
+                        allocatedZoneName = matchingZone.parkease_zones.name
+                        allocatedZoneBuilding = matchingZone.parkease_zones.nearest_building
+                        allocatedZoneGates = matchingZone.parkease_zones.gates || []
                     }
                 }
             }
 
-            // Fallback: pick any active zone that supports the vehicle type
+            // Fallback: pick any active zone that supports the vehicle type and has space (simplification for fallback)
             if (!allocatedZoneId) {
                 const capacityField = form.vehicleType === 'two_wheeler' ? 'capacity_2w_total' : 'capacity_4w_total'
                 const { data: anyZone } = await supabase
                     .from('parkease_zones')
-                    .select('id')
+                    .select('id, name, nearest_building, gates')
                     .eq('status', 'active')
-                    .gt(capacityField, 0)  // Only zones that support this vehicle type
+                    .gt(capacityField, 0)
                     .limit(1)
                 if (anyZone && anyZone.length > 0) {
                     allocatedZoneId = anyZone[0].id
+                    allocatedZoneName = anyZone[0].name
+                    allocatedZoneBuilding = anyZone[0].nearest_building
+                    allocatedZoneGates = anyZone[0].gates || []
                 }
             }
 
@@ -177,8 +208,13 @@ export default function VehicleRegister() {
                 .update({ last_vehicle_added_at: new Date().toISOString() })
                 .eq('id', profile.id)
 
-            setSuccess(true)
-            setTimeout(() => navigate('/student/vehicles'), 2000)
+            setSuccess({
+                vehicleNumber: form.vehicleNumber,
+                zoneName: allocatedZoneName,
+                building: allocatedZoneBuilding,
+                gates: allocatedZoneGates
+            })
+            // Don't auto-redirect, let the user read their zone assignment
         } catch (err) {
             console.error('Registration error:', err)
             
@@ -215,18 +251,60 @@ export default function VehicleRegister() {
                     <CheckCircle size={40} color="#10b981" />
                 </div>
                 <h2 style={{ fontSize: '1.5rem', fontWeight: 800, marginBottom: 8, background: 'linear-gradient(to right, #10b981, #34d399)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-                    Registration Successful!
+                    Vehicle Registered!
                 </h2>
                 <p style={{ color: '#94a3b8', fontSize: '1rem', marginBottom: 20 }}>
-                    Vehicle <b>{form.vehicleNumber}</b> is now linked to your profile.
+                    Vehicle <b>{success.vehicleNumber}</b> is now linked to your profile.
                 </p>
-                <div style={{ background: 'rgba(99, 102, 241, 0.1)', border: '1px solid rgba(99, 102, 241, 0.2)', padding: '12px 20px', borderRadius: 12, color: '#818cf8', fontSize: '0.9rem', fontWeight: 600, marginBottom: 24, display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                    <Hash size={16} /> Campus Entry Authorized
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: '#64748b', fontSize: '0.85rem' }}>
-                    <div className="spinner" style={{ width: 14, height: 14 }} />
-                    Redirecting to your vehicles...
-                </div>
+
+                {/* Zone Allocation Card */}
+                {success.zoneName && (
+                    <div style={{ 
+                        background: 'rgba(99, 102, 241, 0.05)', 
+                        border: '1px solid rgba(99, 102, 241, 0.2)', 
+                        padding: '24px', 
+                        borderRadius: 16, 
+                        width: '100%', 
+                        maxWidth: 400,
+                        marginBottom: 30,
+                        textAlign: 'left'
+                    }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: 12 }}>
+                            <MapPin size={20} color="#818cf8" />
+                            <h3 style={{ fontSize: '1.1rem', fontWeight: 700, margin: 0, color: '#e2e8f0' }}>Zone Allocated</h3>
+                        </div>
+                        
+                        <div style={{ marginBottom: 12 }}>
+                            <div style={{ color: '#64748b', fontSize: '0.8rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Primary Parking Zone</div>
+                            <div style={{ color: '#10b981', fontSize: '1.2rem', fontWeight: 800 }}>{success.zoneName}</div>
+                        </div>
+
+                        {success.building && (
+                            <div style={{ marginBottom: 12 }}>
+                                <div style={{ color: '#64748b', fontSize: '0.8rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Nearest Building</div>
+                                <div style={{ color: '#cbd5e1', fontSize: '1rem', fontWeight: 500 }}>{success.building}</div>
+                            </div>
+                        )}
+
+                        {success.gates && success.gates.length > 0 && (
+                            <div>
+                                <div style={{ color: '#64748b', fontSize: '0.8rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Entry Gates</div>
+                                <div style={{ color: '#cbd5e1', fontSize: '0.95rem', fontWeight: 500 }}>{success.gates.join(', ')}</div>
+                            </div>
+                        )}
+                        
+                        <div style={{ marginTop: 16, padding: '10px 14px', background: 'rgba(250, 204, 21, 0.1)', borderRadius: 8, border: '1px solid rgba(250, 204, 21, 0.2)' }}>
+                            <div style={{ color: '#facc15', fontSize: '0.8rem', fontWeight: 600, display: 'flex', gap: 6 }}>
+                                <AlertCircle size={14} style={{ marginTop: 1 }} />
+                                <div>Always park in your allocated zone to avoid penalties.</div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                <button onClick={() => navigate('/student/vehicles')} className="btn btn-primary" style={{ padding: '12px 32px', fontSize: '1rem' }}>
+                    Continue to Dashboard
+                </button>
             </div>
         )
     }
