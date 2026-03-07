@@ -35,6 +35,7 @@ export default function GuardScanner() {
     const [scannerMode, setScannerMode] = useState('qr') // 'qr' or 'anpr'
     const [anprLoading, setAnprLoading] = useState(false)
     const [anprServerOnline, setAnprServerOnline] = useState(null) // null=checking, true=online, false=offline
+    const [anprRawText, setAnprRawText] = useState('') // live OCR feedback
     // Allow guards to override the server URL (e.g. paste an ngrok HTTPS URL).
     // Falls back to localhost for same-machine setups.
     const [anprServerUrl, setAnprServerUrl] = useState(
@@ -287,15 +288,11 @@ export default function GuardScanner() {
             const videoHeight = video.videoHeight || 480
             if (videoWidth === 0) return
 
-            // Crop to the plate guide box (80% × 55% centred)
-            const cropW = videoWidth * 0.8
-            const cropH = videoHeight * 0.55
-            const startX = (videoWidth - cropW) / 2
-            const startY = (videoHeight - cropH) / 2
-            canvas.width = cropW
-            canvas.height = cropH
-            canvas.getContext('2d').drawImage(video, startX, startY, cropW, cropH, 0, 0, cropW, cropH)
-            const b64Frame = canvas.toDataURL('image/jpeg', 0.85)
+            // Send the FULL frame — the Python server does its own multi-region cropping
+            canvas.width = videoWidth
+            canvas.height = videoHeight
+            canvas.getContext('2d').drawImage(video, 0, 0, videoWidth, videoHeight)
+            const b64Frame = canvas.toDataURL('image/jpeg', 0.80)
 
             let detectedPlate = null
 
@@ -306,24 +303,25 @@ export default function GuardScanner() {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ image: b64Frame }),
-                        signal: AbortSignal.timeout(3000)
+                        signal: AbortSignal.timeout(8000)  // 8s — multi-variant OCR takes time
                     })
                     if (res.ok) {
                         const json = await res.json()
+                        // Show live raw text so guard can see what server is reading
+                        if (json.raw) setAnprRawText(json.raw.toUpperCase())
                         if (json.plate && PLATE_RE.test(json.plate)) {
                             detectedPlate = json.plate
                         }
                     }
                 } catch (err) {
-                    // Server went offline mid-session — flip the status
                     console.warn('ANPR server unreachable, switching to Tesseract fallback')
                     setAnprServerOnline(false)
+                    setAnprRawText('')
                 }
             }
 
             // ── PATH B: Tesseract.js fallback (runs when server is offline) ───
             if (!detectedPlate) {
-                // Lazily initialise Tesseract worker on first use
                 if (!tesseractWorkerRef.current) {
                     const worker = await createWorker('eng')
                     await worker.setParameters({
@@ -332,18 +330,19 @@ export default function GuardScanner() {
                     tesseractWorkerRef.current = worker
                 }
                 const { data: { text } } = await tesseractWorkerRef.current.recognize(b64Frame)
-                // Concatenate lines (handles two-line rear plates)
                 const rawText = text
                     .split('\n')
                     .map(l => l.replace(/[^A-Z0-9]/gi, '').toUpperCase())
                     .filter(l => l.length > 0)
                     .join('')
+                setAnprRawText(rawText)
                 const m = rawText.match(/[A-Z]{2}[0-9]{1,2}[A-Z]{1,3}[0-9]{4}/)
                 if (m && m[0].length >= 8) detectedPlate = m[0]
             }
 
             // ── Trigger check-in / check-out ──────────────────────────────────
             if (detectedPlate) {
+                setAnprRawText('')
                 stopAnprCamera()
                 setManualSearch(detectedPlate)
                 await handleManualSearch({ preventDefault: () => {} }, detectedPlate, true)
@@ -1029,8 +1028,15 @@ export default function GuardScanner() {
                                         AUTO-SCANNING ACTIVE
                                     </span>
                                 </div>
-                                <div style={{ position: 'absolute', bottom: 30, color: 'white', fontWeight: 600, textShadow: '0 2px 4px rgba(0,0,0,0.8)', fontSize: '0.95rem' }}>
-                                    Align license plate within the box
+                                <div style={{ position: 'absolute', bottom: 30, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+                                    <div style={{ color: 'white', fontWeight: 600, textShadow: '0 2px 4px rgba(0,0,0,0.8)', fontSize: '0.95rem' }}>
+                                        Align license plate within the box
+                                    </div>
+                                    {anprRawText && (
+                                        <div style={{ background: 'rgba(0,0,0,0.7)', border: '1px solid rgba(250, 204, 21, 0.5)', padding: '4px 12px', borderRadius: 6, color: '#facc15', fontSize: '0.85rem', fontFamily: 'monospace', fontWeight: 600 }}>
+                                            Detecting: {anprRawText}
+                                        </div>
+                                    )}
                                 </div>
                             </div>
 

@@ -138,33 +138,82 @@ def clean_plate(text: str) -> tuple[str | None, str]:
     return None, raw
 
 
+# ── Helper: preprocess image for OCR ─────────────────────────────────────────
+def preprocess_for_ocr(gray: np.ndarray) -> list[np.ndarray]:
+    """
+    Returns multiple preprocessed versions of a grayscale image.
+    EasyOCR will be run on each; the best result is kept.
+    """
+    variants = []
+
+    # 1. Upscale to ensure minimum width of 300px for accuracy
+    h, w = gray.shape
+    if w < 300:
+        scale = 300 / w
+        gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+
+    # 2. Sharpen to enhance character edges
+    kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
+    sharp = cv2.filter2D(gray, -1, kernel)
+
+    # Variant A: Otsu global threshold on sharpened
+    _, otsu = cv2.threshold(sharp, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    variants.append(otsu)
+
+    # Variant B: Adaptive threshold (handles uneven lighting on plates)
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+    adaptive = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                     cv2.THRESH_BINARY, 11, 2)
+    variants.append(adaptive)
+
+    # Variant C: Inverted Otsu (catches dark-on-light AND light-on-dark plates)
+    variants.append(cv2.bitwise_not(otsu))
+
+    # Variant D: Plain sharpened grayscale (EasyOCR handles its own binarisation)
+    variants.append(sharp)
+
+    return variants
+
+
 # ── Helper: EasyOCR on a cropped region ──────────────────────────────────────
 def ocr_region(img_bgr: np.ndarray) -> tuple[str, float]:
     """
-    Run EasyOCR on the given BGR image crop.
-    Returns (joined_text, avg_confidence).
+    Run EasyOCR with multiple preprocessing variants on the given BGR crop.
+    Returns (best_joined_text, best_avg_confidence).
     """
     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-    # Upscale small plates for better OCR accuracy
-    h, w = gray.shape
-    if w < 200:
-        scale = 200 / w
-        gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+    variants = preprocess_for_ocr(gray)
 
-    # Light threshold to improve contrast
-    gray = cv2.GaussianBlur(gray, (3, 3), 0)
-    _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    best_text = ""
+    best_conf = 0.0
 
-    results = ocr_reader.readtext(thresh)
-    if not results:
-        return "", 0.0
+    for variant in variants:
+        try:
+            results = ocr_reader.readtext(variant, detail=1, paragraph=False)
+        except Exception:
+            continue
+        if not results:
+            continue
 
-    # Concatenate all text chunks (handles two-line plates)
-    texts = [r[1] for r in results if r[2] > 0.15]
-    confs = [r[2] for r in results if r[2] > 0.15]
-    joined = " ".join(texts)
-    avg_conf = sum(confs) / len(confs) if confs else 0.0
-    return joined, avg_conf
+        # Keep results with confidence > 0.1 (very permissive — filter later)
+        hits = [(r[1], r[2]) for r in results if r[2] > 0.1]
+        if not hits:
+            continue
+
+        joined = " ".join(t for t, _ in hits)
+        avg_conf = sum(c for _, c in hits) / len(hits)
+
+        # Prefer the variant that yields a valid plate
+        plate, _ = clean_plate(joined)
+        if plate and avg_conf > best_conf:
+            best_text = joined
+            best_conf = avg_conf
+        elif not best_text and avg_conf > best_conf:
+            # No plate yet — keep best raw text for debug
+            best_text = joined
+            best_conf = avg_conf
+
+    return best_text, best_conf
 
 
 # ── Main detection endpoint ───────────────────────────────────────────────────
@@ -177,7 +226,7 @@ async def detect(req: DetectRequest):
 
         # ── Path A: YOLO model available → detect plate region first ──────────
         if yolo_model is not None:
-            results = yolo_model(img, verbose=False, conf=0.3)
+            results = yolo_model(img, verbose=False, conf=0.25)
             best_plate = None
             best_conf = 0.0
             best_raw = ""
@@ -186,7 +235,6 @@ async def detect(req: DetectRequest):
                 for box in result.boxes:
                     x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
                     det_conf = float(box.conf[0])
-                    # Crop to detected plate region
                     crop = img[max(0, y1):y2, max(0, x1):x2]
                     if crop.size == 0:
                         continue
@@ -202,24 +250,44 @@ async def detect(req: DetectRequest):
                 log.info(f"[YOLO] Detected: {best_plate}  conf={best_conf:.2f}")
                 return DetectResponse(plate=best_plate, confidence=best_conf, raw=best_raw)
 
-        # ── Path B: No YOLO (or YOLO found nothing) → OCR full frame ─────────
-        # Crop the centre 80%×40% of the frame (where plates typically appear)
+        # ── Path B: EasyOCR-only — try multiple crop regions ──────────────────
         h, w = img.shape[:2]
-        x1 = int(w * 0.10)
-        x2 = int(w * 0.90)
-        y1 = int(h * 0.30)
-        y2 = int(h * 0.70)
-        crop = img[y1:y2, x1:x2]
 
-        text, conf = ocr_region(crop)
-        plate, raw = clean_plate(text)
+        # Try 3 different vertical crop bands to catch plate at various distances
+        crop_regions = [
+            # (y_start_frac, y_end_frac, x_start_frac, x_end_frac)
+            (0.25, 0.75, 0.05, 0.95),   # centre band (standard)
+            (0.15, 0.65, 0.05, 0.95),   # upper-centre (plate close to top/wide angle)
+            (0.35, 0.85, 0.05, 0.95),   # lower-centre (plate close to bottom)
+            (0.0,  1.0,  0.0,  1.0),    # full frame fallback
+        ]
 
-        if plate:
-            log.info(f"[OCR-only] Detected: {plate}  conf={conf:.2f}")
-        else:
-            log.debug(f"[OCR-only] No plate found. Raw='{raw}'")
+        best_plate = None
+        best_conf = 0.0
+        best_raw = ""
 
-        return DetectResponse(plate=plate, confidence=conf, raw=raw)
+        for (y0f, y1f, x0f, x1f) in crop_regions:
+            y0, y1_ = int(h * y0f), int(h * y1f)
+            x0, x1_ = int(w * x0f), int(w * x1f)
+            crop = img[y0:y1_, x0:x1_]
+            if crop.size == 0:
+                continue
+
+            text, conf = ocr_region(crop)
+            plate, raw = clean_plate(text)
+
+            log.info(f"[OCR crop ({y0f:.0%}-{y1f:.0%})] raw='{raw}'  plate={plate}  conf={conf:.2f}")
+
+            if plate and conf > best_conf:
+                best_plate = plate
+                best_conf = conf
+                best_raw = raw
+
+            # Stop as soon as we find a high-confidence plate
+            if best_plate and best_conf > 0.6:
+                break
+
+        return DetectResponse(plate=best_plate, confidence=best_conf, raw=best_raw)
 
     except Exception as exc:
         log.error(f"Detection error: {exc}", exc_info=True)
