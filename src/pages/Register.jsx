@@ -1,15 +1,16 @@
-import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { ParkingCircle, Mail, Lock, User, Phone, Hash, Building, ArrowRight, GraduationCap, Upload, Image as ImageIcon } from 'lucide-react'
 
 export default function Register() {
+    const navigate = useNavigate()
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState('')
     const [successMessage, setSuccessMessage] = useState(false)
     const [form, setForm] = useState({
         email: '', password: '', fullName: '', phone: '',
-        enrollmentId: '', role: 'student', department: '', semester: ''
+        enrollmentId: '', department: '', semester: ''
     })
     const [photoFile, setPhotoFile] = useState(null)
     const [photoPreview, setPhotoPreview] = useState(null)
@@ -24,9 +25,16 @@ export default function Register() {
             return
         }
         setPhotoFile(file)
+        if (photoPreview) URL.revokeObjectURL(photoPreview)
         setPhotoPreview(URL.createObjectURL(file))
         setError('')
     }
+
+    useEffect(() => {
+        return () => {
+            if (photoPreview) URL.revokeObjectURL(photoPreview)
+        }
+    }, [photoPreview])
 
     const handleRegister = async (e) => {
         e.preventDefault()
@@ -64,7 +72,7 @@ export default function Register() {
                         full_name: form.fullName,
                         phone: form.phone,
                         enrollment_id: form.enrollmentId,
-                        role: form.role,
+                        role: 'student', // Student self-registration only
                         department: form.department || null,
                         semester: form.semester || null,
                         profile_photo: publicUrl
@@ -89,7 +97,7 @@ export default function Register() {
             setLoading(false)
             // Redirect will be handled by AuthContext + App.jsx routing
             setTimeout(() => {
-                window.location.href = '/dashboard'
+                navigate('/dashboard')
             }, 1500)
 
         } catch (err) {
