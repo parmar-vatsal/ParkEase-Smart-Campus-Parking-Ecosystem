@@ -40,10 +40,10 @@ import cv2
 import easyocr
 import numpy as np
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)s  %(message)s")
@@ -52,10 +52,19 @@ log = logging.getLogger("anpr")
 # ── FastAPI app ───────────────────────────────────────────────────────────────
 app = FastAPI(title="ParkEase ANPR Server", version="1.0.0")
 
-# Allow the React dev server (and any Vercel deploy) to call this local server
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        "ANPR_ALLOWED_ORIGINS",
+        "https://parkease.vercel.app,http://localhost:5173",
+    ).split(",")
+    if origin.strip()
+]
+
+# Allow only trusted frontend origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],       # allow all origins — the server is localhost-only anyway
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["POST", "GET", "OPTIONS"],
     allow_headers=["*"],
 )
@@ -98,7 +107,7 @@ async def load_models():
 
 # ── Request / Response schemas ────────────────────────────────────────────────
 class DetectRequest(BaseModel):
-    image: str   # base64-encoded image (JPEG or PNG)
+    image: str = Field(..., max_length=14_000_000)  # base64-encoded image (JPEG or PNG)
 
 
 class DetectResponse(BaseModel):
@@ -110,9 +119,12 @@ class DetectResponse(BaseModel):
 # ── Helper: base64 → OpenCV image ────────────────────────────────────────────
 def b64_to_cv2(b64_string: str) -> np.ndarray:
     # Strip data-URL prefix when present, e.g. "data:image/jpeg;base64,/9j/..."
-    if "," in b64_string:
-        b64_string = b64_string.split(",", 1)[1]
-    raw = base64.b64decode(b64_string)
+    try:
+        if "," in b64_string:
+            b64_string = b64_string.split(",", 1)[1]
+        raw = base64.b64decode(b64_string, validate=True)
+    except Exception as exc:
+        raise ValueError("Invalid base64 image payload") from exc
     img_array = np.frombuffer(raw, dtype=np.uint8)
     img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
     return img
@@ -218,11 +230,26 @@ def ocr_region(img_bgr: np.ndarray) -> tuple[str, float]:
 
 # ── Main detection endpoint ───────────────────────────────────────────────────
 @app.post("/detect", response_model=DetectResponse)
-async def detect(req: DetectRequest):
+async def detect(req: DetectRequest, x_api_key: str | None = Header(default=None, alias="X-API-Key")):
     try:
+        expected_api_key = os.getenv("ANPR_API_KEY")
+        if not expected_api_key:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="ANPR_API_KEY is not configured",
+            )
+        if x_api_key != expected_api_key:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid API key",
+            )
+
         img = b64_to_cv2(req.image)
         if img is None:
-            return DetectResponse(plate=None, confidence=0.0, raw="")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Could not decode image payload",
+            )
 
         # ── Path A: YOLO model available → detect plate region first ──────────
         if yolo_model is not None:
@@ -289,9 +316,19 @@ async def detect(req: DetectRequest):
 
         return DetectResponse(plate=best_plate, confidence=best_conf, raw=best_raw)
 
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
     except Exception as exc:
         log.error(f"Detection error: {exc}", exc_info=True)
-        return DetectResponse(plate=None, confidence=0.0, raw="")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal ANPR detection error",
+        ) from exc
 
 
 # ── Health check ──────────────────────────────────────────────────────────────
@@ -325,7 +362,7 @@ if __name__ == "__main__":
         global public_url, tunnel_proc
         try:
             tunnel_proc = subprocess.Popen(
-                ["ssh", "-o", "StrictHostKeyChecking=no",
+                ["ssh", "-o", "StrictHostKeyChecking=yes",
                  "-R", "80:localhost:8000", "nokey@localhost.run"],
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, bufsize=1

@@ -1,9 +1,10 @@
-import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { ParkingCircle, Mail, Lock, User, Phone, Hash, Building, ArrowRight, GraduationCap, Upload, Image as ImageIcon } from 'lucide-react'
 
 export default function StaffRegister() {
+    const navigate = useNavigate()
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState('')
     const [successMessage, setSuccessMessage] = useState(false)
@@ -24,9 +25,16 @@ export default function StaffRegister() {
             return
         }
         setPhotoFile(file)
+        if (photoPreview) URL.revokeObjectURL(photoPreview)
         setPhotoPreview(URL.createObjectURL(file))
         setError('')
     }
+
+    useEffect(() => {
+        return () => {
+            if (photoPreview) URL.revokeObjectURL(photoPreview)
+        }
+    }, [photoPreview])
 
     const handleRegister = async (e) => {
         e.preventDefault()
@@ -56,6 +64,7 @@ export default function StaffRegister() {
             const { data: { publicUrl } } = supabase.storage.from('avatars').getPublicUrl(fileName)
 
             // 2. Sign up with Supabase Auth
+            const safeRole = ['faculty', 'staff'].includes(form.role) ? form.role : 'faculty'
             const { data: authData, error: authError } = await supabase.auth.signUp({
                 email: form.email,
                 password: form.password,
@@ -64,7 +73,7 @@ export default function StaffRegister() {
                         full_name: form.fullName,
                         phone: form.phone,
                         enrollment_id: form.employeeId, // we map employeeId to the same DB column
-                        role: form.role,
+                        role: safeRole,
                         department: form.department || null,
                         profile_photo: publicUrl
                     }
@@ -88,7 +97,7 @@ export default function StaffRegister() {
             setLoading(false)
             // Redirect will be handled by AuthContext + App.jsx routing
             setTimeout(() => {
-                window.location.href = '/dashboard'
+                navigate('/dashboard')
             }, 1500)
 
         } catch (err) {

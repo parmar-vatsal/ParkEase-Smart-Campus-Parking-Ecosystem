@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { supabase, supabaseSecondary } from '../lib/supabase'
+import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { QRCodeSVG } from 'qrcode.react'
 import {
@@ -54,6 +54,12 @@ export default function AdminDashboard() {
     })
     const [adminPassLoading, setAdminPassLoading] = useState(false)
     const [adminPassMsg, setAdminPassMsg] = useState(null)
+
+    const generateOtp = () => {
+        const array = new Uint32Array(1)
+        crypto.getRandomValues(array)
+        return String(100000 + (array[0] % 900000))
+    }
 
     useEffect(() => {
         fetchAll()
@@ -308,7 +314,7 @@ export default function AdminDashboard() {
         valid_until.setHours(valid_until.getHours() + parseInt(adminPassForm.duration_hours))
 
         const token = generatePassString(adminPassForm.guest_name, vn, adminPassForm.duration_hours)
-        const otp = Math.floor(100000 + Math.random() * 900000).toString()
+        const otp = generateOtp()
 
         const { error: insertErr } = await supabase.from('parkease_guest_passes').insert([{
             sponsor_id: profile.id, // The admin's profile ID
@@ -406,16 +412,33 @@ export default function AdminDashboard() {
         e.preventDefault()
         setGuardLoading(true)
         setGuardMessage(null)
-        const { error } = await supabaseSecondary.auth.signUp({
-            email: guardForm.email,
-            password: guardForm.password,
-            options: { data: { full_name: guardForm.fullName, phone: guardForm.phone, role: 'guard' } }
-        })
-        if (error) {
-            setGuardMessage({ type: 'error', text: error.message })
-        } else {
+        try {
+            const { data: { session } } = await supabase.auth.getSession()
+            if (!session) throw new Error('Session expired. Please log in again.')
+
+            const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/create-guard`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${session.access_token}`,
+                },
+                body: JSON.stringify({
+                    email: guardForm.email,
+                    password: guardForm.password,
+                    full_name: guardForm.fullName,
+                    phone: guardForm.phone,
+                }),
+            })
+
+            if (!res.ok) {
+                const body = await res.json().catch(() => ({}))
+                throw new Error(body.error || 'Failed to create guard account.')
+            }
+
             setGuardMessage({ type: 'success', text: `Guard account created for ${guardForm.fullName}! They can now log in at /login.` })
             setGuardForm({ fullName: '', email: '', phone: '', password: '' })
+        } catch (error) {
+            setGuardMessage({ type: 'error', text: error.message })
         }
         setGuardLoading(false)
     }

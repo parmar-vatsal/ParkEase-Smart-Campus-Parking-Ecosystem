@@ -14,6 +14,12 @@ export default function WalkInRegistration() {
     const [successData, setSuccessData] = useState(null)
     const [errorMsg, setErrorMsg] = useState(null)
 
+    const generateOtp = () => {
+        const array = new Uint32Array(1)
+        crypto.getRandomValues(array)
+        return String(100000 + (array[0] % 900000))
+    }
+
     const generatePassString = (guestName, vehicleNumber) => {
         const expiry = new Date()
         expiry.setHours(expiry.getHours() + 2) // 2 hours for walk-ins
@@ -68,7 +74,7 @@ export default function WalkInRegistration() {
         valid_until.setHours(valid_until.getHours() + 2) // 2 hours for pending walk-ins
 
         const token = generatePassString(form.guest_name, vn)
-        const otp = Math.floor(100000 + Math.random() * 900000).toString()
+        const otp = generateOtp()
 
         const { data, error: insertErr } = await supabase.from('parkease_guest_passes').insert([{
             sponsor_id: null,
