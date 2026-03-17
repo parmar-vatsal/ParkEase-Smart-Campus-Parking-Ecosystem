@@ -1,7 +1,42 @@
 import { createClient } from '@supabase/supabase-js'
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
+const normalizeSupabaseUrl = (url) => {
+    const trimmedUrl = url?.trim()
+    if (!trimmedUrl) return ''
+
+    const withProtocol = /^https?:\/\//i.test(trimmedUrl)
+        ? trimmedUrl
+        : `https://${trimmedUrl}`
+
+    return withProtocol.replace(/\/+$/, '')
+}
+
+const parseSupabaseUrl = (url) => {
+    let parsedUrl
+    try {
+        parsedUrl = new URL(url)
+    } catch (error) {
+        throw new Error(`Invalid VITE_SUPABASE_URL "${url}". ${error.message}. Use format: https://<project-ref>.supabase.co`)
+    }
+
+    if (parsedUrl.protocol !== 'https:') {
+        throw new Error('Invalid VITE_SUPABASE_URL protocol. Supabase URL must start with https://')
+    }
+
+    return parsedUrl
+}
+
+const supabaseUrl = normalizeSupabaseUrl(import.meta.env.VITE_SUPABASE_URL)
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim()
+
+if (!supabaseUrl || !supabaseAnonKey) {
+    throw new Error('Missing Supabase environment variables. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.')
+}
+
+const parsedSupabaseUrl = parseSupabaseUrl(supabaseUrl)
+const supabaseProjectRef = parsedSupabaseUrl.hostname.endsWith('.supabase.co')
+    ? parsedSupabaseUrl.hostname.split('.')[0]
+    : parsedSupabaseUrl.hostname.replace(/[^a-z0-9-]/gi, '-').toLowerCase()
 
 // ---------------------------------------------------------------------------
 // Custom in-memory lock function to replace Supabase's default browser
@@ -40,7 +75,6 @@ export const supabaseSecondary = createClient(supabaseUrl, supabaseAnonKey, {
         persistSession: false,
         autoRefreshToken: false,
         detectSessionInUrl: false,
-        storageKey: 'sb-amjrbnanzigqpggmvzgw-admin-token',
+        storageKey: `sb-${supabaseProjectRef}-admin-token`,
     }
 })
-
