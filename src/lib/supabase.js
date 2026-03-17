@@ -1,7 +1,29 @@
 import { createClient } from '@supabase/supabase-js'
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
+const normalizeSupabaseUrl = (url) => {
+    const trimmedUrl = url?.trim()
+    if (!trimmedUrl) return ''
+
+    const withProtocol = /^https?:\/\//i.test(trimmedUrl)
+        ? trimmedUrl
+        : `https://${trimmedUrl}`
+
+    return withProtocol.replace(/\/+$/, '')
+}
+
+const supabaseUrl = normalizeSupabaseUrl(import.meta.env.VITE_SUPABASE_URL)
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim()
+
+if (!supabaseUrl || !supabaseAnonKey) {
+    throw new Error('Missing Supabase environment variables. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.')
+}
+
+let supabaseProjectRef = 'supabase'
+try {
+    supabaseProjectRef = new URL(supabaseUrl).hostname.split('.')[0] || 'supabase'
+} catch {
+    throw new Error('Invalid VITE_SUPABASE_URL. Use the full Supabase project URL, e.g. https://<project-ref>.supabase.co')
+}
 
 // ---------------------------------------------------------------------------
 // Custom in-memory lock function to replace Supabase's default browser
@@ -40,7 +62,6 @@ export const supabaseSecondary = createClient(supabaseUrl, supabaseAnonKey, {
         persistSession: false,
         autoRefreshToken: false,
         detectSessionInUrl: false,
-        storageKey: 'sb-amjrbnanzigqpggmvzgw-admin-token',
+        storageKey: `sb-${supabaseProjectRef}-admin-token`,
     }
 })
-
