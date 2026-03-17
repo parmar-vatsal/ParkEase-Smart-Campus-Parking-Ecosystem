@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { QRCodeSVG } from 'qrcode.react'
 import { Ticket, Download, Clock, CheckCircle, XCircle } from 'lucide-react'
+import { generateSecureOtp } from '../utils/otp'
 
 export default function GuestInvites() {
     const { profile } = useAuth()
@@ -35,12 +36,6 @@ export default function GuestInvites() {
 
         setPasses(data || [])
         setLoading(false)
-    }
-
-    const generateOtp = () => {
-        const array = new Uint32Array(1)
-        crypto.getRandomValues(array)
-        return String(100000 + (array[0] % 900000))
     }
 
     const generatePassString = (guestName, vehicleNumber, durationHours) => {
@@ -92,7 +87,7 @@ export default function GuestInvites() {
         valid_until.setHours(valid_until.getHours() + parseInt(form.duration_hours))
 
         const token = generatePassString(form.guest_name, vn, form.duration_hours)
-        const otp = generateOtp()
+        const otp = generateSecureOtp()
 
         const { error: insertErr } = await supabase.from('parkease_guest_passes').insert([{
             sponsor_id: profile.id,

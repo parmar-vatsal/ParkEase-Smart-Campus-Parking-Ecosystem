@@ -60,6 +60,7 @@ ALLOWED_ORIGINS = [
     ).split(",")
     if origin.strip()
 ]
+MAX_IMAGE_B64_LENGTH = 14_000_000  # max base64 text size (~10.5 MB decoded image data)
 
 # Allow only trusted frontend origins
 app.add_middleware(
@@ -107,7 +108,7 @@ async def load_models():
 
 # ── Request / Response schemas ────────────────────────────────────────────────
 class DetectRequest(BaseModel):
-    image: str = Field(..., max_length=14_000_000)  # base64-encoded image (JPEG or PNG)
+    image: str = Field(..., max_length=MAX_IMAGE_B64_LENGTH)  # base64-encoded image (JPEG or PNG)
 
 
 class DetectResponse(BaseModel):

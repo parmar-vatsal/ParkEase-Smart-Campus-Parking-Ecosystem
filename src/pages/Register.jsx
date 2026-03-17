@@ -72,7 +72,7 @@ export default function Register() {
                         full_name: form.fullName,
                         phone: form.phone,
                         enrollment_id: form.enrollmentId,
-                        role: 'student',
+                        role: 'student', // Student self-registration only
                         department: form.department || null,
                         semester: form.semester || null,
                         profile_photo: publicUrl

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { Car, User, Phone, CheckCircle, Clock } from 'lucide-react'
+import { generateSecureOtp } from '../utils/otp'
 
 export default function WalkInRegistration() {
     const [form, setForm] = useState({
@@ -13,12 +14,6 @@ export default function WalkInRegistration() {
     const [loading, setLoading] = useState(false)
     const [successData, setSuccessData] = useState(null)
     const [errorMsg, setErrorMsg] = useState(null)
-
-    const generateOtp = () => {
-        const array = new Uint32Array(1)
-        crypto.getRandomValues(array)
-        return String(100000 + (array[0] % 900000))
-    }
 
     const generatePassString = (guestName, vehicleNumber) => {
         const expiry = new Date()
@@ -74,7 +69,7 @@ export default function WalkInRegistration() {
         valid_until.setHours(valid_until.getHours() + 2) // 2 hours for pending walk-ins
 
         const token = generatePassString(form.guest_name, vn)
-        const otp = generateOtp()
+        const otp = generateSecureOtp()
 
         const { data, error: insertErr } = await supabase.from('parkease_guest_passes').insert([{
             sponsor_id: null,

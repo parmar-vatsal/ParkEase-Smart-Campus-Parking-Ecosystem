@@ -12,6 +12,7 @@ import AddGuardForm from '../components/admin/AddGuardForm'
 import AdminGuestPassTab from '../components/admin/AdminGuestPassTab'
 import AdminVehicleDetails from '../components/admin/AdminVehicleDetails'
 import AdminZonesTab from '../components/admin/AdminZonesTab'
+import { generateSecureOtp } from '../utils/otp'
 
 // ─── Left sidebar nav items ───────────────────────────────────────────────────
 const NAV_ITEMS = [
@@ -54,12 +55,6 @@ export default function AdminDashboard() {
     })
     const [adminPassLoading, setAdminPassLoading] = useState(false)
     const [adminPassMsg, setAdminPassMsg] = useState(null)
-
-    const generateOtp = () => {
-        const array = new Uint32Array(1)
-        crypto.getRandomValues(array)
-        return String(100000 + (array[0] % 900000))
-    }
 
     useEffect(() => {
         fetchAll()
@@ -314,7 +309,7 @@ export default function AdminDashboard() {
         valid_until.setHours(valid_until.getHours() + parseInt(adminPassForm.duration_hours))
 
         const token = generatePassString(adminPassForm.guest_name, vn, adminPassForm.duration_hours)
-        const otp = generateOtp()
+        const otp = generateSecureOtp()
 
         const { error: insertErr } = await supabase.from('parkease_guest_passes').insert([{
             sponsor_id: profile.id, // The admin's profile ID
