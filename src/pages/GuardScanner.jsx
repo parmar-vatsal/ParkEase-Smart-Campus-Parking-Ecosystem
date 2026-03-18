@@ -2,6 +2,9 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { Html5Qrcode } from 'html5-qrcode'
+import { getCapacityData } from '../utils/capacity'
+import { formatDuration } from '../utils/format'
+
 import {
     ScanLine, Search, ArrowDownCircle, ArrowUpCircle, User, Car, Phone,
     MapPin, Clock, CheckCircle, XCircle, AlertTriangle, Bike, CarFront,
@@ -34,13 +37,13 @@ export default function GuardScanner() {
     const html5QrRef = useRef(null)          // QR scanner instance
 
     useEffect(() => {
-        fetchCapacity()
+        loadCapacity()
         fetchZones()
         fetchRecentLogs()
         fetchPendingWalkins()
         fetchOverstayGuests()
         const interval = setInterval(() => {
-            fetchCapacity()
+            loadCapacity()
             fetchPendingWalkins()
             fetchOverstayGuests()
         }, 30000)
@@ -74,37 +77,9 @@ export default function GuardScanner() {
         setOverstayGuests(data || [])
     }
 
-    const fetchCapacity = async () => {
-        const { data: zonesData } = await supabase.from('parkease_zones').select('*').eq('status', 'active').order('name')
-        const { data: activeLogs } = await supabase.from('parkease_logs').select('zone_id, vehicle_id, vehicle_number, parkease_vehicles(vehicle_type)').eq('status', 'inside')
-
-        // Fetch active guest passes to determine their vehicle types
-        const { data: activeGuests } = await supabase.from('parkease_guest_passes').select('vehicle_number, vehicle_type').eq('status', 'active')
-        const guestTypeMap = {}
-        if (activeGuests) {
-            activeGuests.forEach(g => {
-                guestTypeMap[g.vehicle_number] = g.vehicle_type
-            })
-        }
-
-        const rows = []
-        for (const zone of (zonesData || [])) {
-            const i2 = (activeLogs || []).filter(l => {
-                if (l.zone_id !== zone.id) return false;
-                if (l.parkease_vehicles?.vehicle_type) return l.parkease_vehicles.vehicle_type === 'two_wheeler';
-                return guestTypeMap[l.vehicle_number] === 'two_wheeler';
-            }).length;
-
-            const i4 = (activeLogs || []).filter(l => {
-                if (l.zone_id !== zone.id) return false;
-                if (l.parkease_vehicles?.vehicle_type) return l.parkease_vehicles.vehicle_type === 'four_wheeler';
-                return guestTypeMap[l.vehicle_number] === 'four_wheeler';
-            }).length;
-
-            if (zone.capacity_2w_total > 0) { const t = zone.capacity_2w_total + (zone.capacity_2w_overflow || 0); rows.push({ zone_id: zone.id, zone_name: zone.name, vehicle_type: 'two_wheeler', total_slots: t, available_slots: Math.max(0, t - i2), occupancy_percent: t > 0 ? Math.round((i2 / t) * 100) : 0 }) }
-            if (zone.capacity_4w_total > 0) { const t = zone.capacity_4w_total + (zone.capacity_4w_overflow || 0); rows.push({ zone_id: zone.id, zone_name: zone.name, vehicle_type: 'four_wheeler', total_slots: t, available_slots: Math.max(0, t - i4), occupancy_percent: t > 0 ? Math.round((i4 / t) * 100) : 0 }) }
-        }
-        setCapacity(rows)
+    const loadCapacity = async () => {
+        const { data: capacityRows } = await getCapacityData();
+        setCapacity(capacityRows || []);
     }
 
     const fetchZones = async () => {
@@ -312,7 +287,7 @@ export default function GuardScanner() {
             return { handled: true }
         }
 
-        fetchCapacity()
+        loadCapacity()
         fetchRecentLogs()
         fetchPendingWalkins()
         setManualSearch('')
@@ -608,7 +583,7 @@ export default function GuardScanner() {
                 }
             }
 
-            fetchCapacity()
+            loadCapacity()
             fetchRecentLogs()
             fetchPendingWalkins()
             fetchOverstayGuests()

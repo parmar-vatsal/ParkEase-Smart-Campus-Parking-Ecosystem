@@ -1,6 +1,10 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
+import { getCapacityData } from '../utils/capacity'
+import { formatDate, formatDuration, getCapacityColor } from '../utils/format'
+import { generatePassString, downloadGuestPassQR } from '../utils/qrDownload'
+
 import { QRCodeSVG } from 'qrcode.react'
 import {
     LayoutDashboard, Search, Car, Users, TrendingUp, ArrowDownCircle,
@@ -57,12 +61,12 @@ export default function AdminDashboard() {
 
     useEffect(() => {
         fetchAll()
-        const interval = setInterval(fetchCapacity, 10000)
+        const interval = setInterval(loadCapacity, 10000)
         return () => clearInterval(interval)
     }, [])
 
     const fetchAll = async () => {
-        await Promise.all([fetchStats(), fetchCapacity(), fetchAllVehicles(), fetchAllGuests(), fetchOverstayLogs()])
+        await Promise.all([fetchStats(), loadCapacity(), fetchAllVehicles(), fetchAllGuests(), fetchOverstayLogs()])
         setLoading(false)
     }
 
@@ -92,58 +96,11 @@ export default function AdminDashboard() {
         })
     }
 
-    const fetchCapacity = async () => {
-        const { data: zonesData } = await supabase
-            .from('parkease_zones')
-            .select('*')
-            .eq('status', 'active')
-            .order('name')
-
-        const { data: activeLogs } = await supabase
-            .from('parkease_logs')
-            .select('zone_id, vehicle_id, vehicle_number, parkease_vehicles(vehicle_type)')
-            .eq('status', 'inside')
-            
-        // Fetch active guest passes to determine their vehicle types
-        const { data: activeGuests } = await supabase
-            .from('parkease_guest_passes')
-            .select('vehicle_number, vehicle_type')
-            .eq('status', 'active')
-            
-        const guestTypeMap = {}
-        if (activeGuests) {
-            activeGuests.forEach(g => {
-                guestTypeMap[g.vehicle_number] = g.vehicle_type
-            })
-        }
-
-        const capacityRows = []
-        for (const zone of (zonesData || [])) {
-            const inside2w = (activeLogs || []).filter(l => {
-                if (l.zone_id !== zone.id) return false;
-                if (l.parkease_vehicles?.vehicle_type) return l.parkease_vehicles.vehicle_type === 'two_wheeler';
-                return guestTypeMap[l.vehicle_number] === 'two_wheeler';
-            }).length;
-            
-            const inside4w = (activeLogs || []).filter(l => {
-                if (l.zone_id !== zone.id) return false;
-                if (l.parkease_vehicles?.vehicle_type) return l.parkease_vehicles.vehicle_type === 'four_wheeler';
-                return guestTypeMap[l.vehicle_number] === 'four_wheeler';
-            }).length;
-
-            if (zone.capacity_2w_total > 0) {
-                const total = zone.capacity_2w_total + (zone.capacity_2w_overflow || 0)
-                capacityRows.push({ zone_id: zone.id, zone_name: zone.name, zone_code: zone.code, vehicle_type: 'two_wheeler', total_slots: total, available_slots: Math.max(0, total - inside2w), occupancy_percent: total > 0 ? Math.round((inside2w / total) * 100) : 0, occupied_slots: inside2w })
-            }
-            if (zone.capacity_4w_total > 0) {
-                const total = zone.capacity_4w_total + (zone.capacity_4w_overflow || 0)
-                capacityRows.push({ zone_id: zone.id, zone_name: zone.name, zone_code: zone.code, vehicle_type: 'four_wheeler', total_slots: total, available_slots: Math.max(0, total - inside4w), occupancy_percent: total > 0 ? Math.round((inside4w / total) * 100) : 0, occupied_slots: inside4w })
-            }
-        }
-        setCapacity(capacityRows)
+    const loadCapacity = async () => {
+        const { data: capacityRows } = await getCapacityData();
+        setCapacity(capacityRows || []);
     }
-
-    const fetchAllVehicles = async () => {
+const fetchAllVehicles = async () => {
         const { data } = await supabase.from('parkease_vehicles').select('*, parkease_profiles(*)').order('created_at', { ascending: false }).limit(100)
         setAllVehicles(data || [])
     }
@@ -307,7 +264,7 @@ export default function AdminDashboard() {
         const valid_until = new Date()
         valid_until.setHours(valid_until.getHours() + parseInt(adminPassForm.duration_hours))
 
-        const token = generatePassString(adminPassForm.guest_name, vn, adminPassForm.duration_hours)
+        const token = generatePassString('GUEST', 'Admin / ' + profile?.full_name, adminPassForm.guest_name, vn, adminPassForm.duration_hours)
         const array = new Uint32Array(1);
         crypto.getRandomValues(array);
         const otp = String(100000 + (array[0] % 900000));
@@ -841,7 +798,7 @@ export default function AdminDashboard() {
                         adminPassLoading={adminPassLoading}
                         adminPassMsg={adminPassMsg}
                         allGuests={allGuests}
-                        downloadQR={downloadQR}
+                        downloadQR={downloadGuestPassQR}
                         handleCancelPass={handleCancelPass}
                         handleExtendTime={handleExtendTime}
                     />
