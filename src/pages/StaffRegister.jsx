@@ -88,8 +88,8 @@ export default function StaffRegister() {
             setSuccessMessage(true)
             setLoading(false)
             // Redirect will be handled by AuthContext + App.jsx routing
-            setTnavigate('/dashboard')
-                window.location.href = '/dashboard'
+            setTimeout(() => {
+                navigate('/dashboard')
             }, 1500)
 
         } catch (err) {
