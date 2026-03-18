@@ -13,6 +13,8 @@ export default function WalkInRegistration() {
     const [loading, setLoading] = useState(false)
     const [successData, setSuccessData] = useState(null)
     const [errorMsg, setErrorMsg] = useState(null)
+    const [captcha, setCaptcha] = useState({ num1: Math.floor(Math.random() * 10), num2: Math.floor(Math.random() * 10) })
+    const [captchaInput, setCaptchaInput] = useState('')
 
     const generatePassString = (guestName, vehicleNumber) => {
         const expiry = new Date()
@@ -30,6 +32,21 @@ export default function WalkInRegistration() {
         e.preventDefault()
         setLoading(true)
         setErrorMsg(null)
+
+        if (parseInt(captchaInput) !== captcha.num1 + captcha.num2) {
+            setErrorMsg('Incorrect math answer. Please try again.')
+            setCaptcha({ num1: Math.floor(Math.random() * 10), num2: Math.floor(Math.random() * 10) })
+            setCaptchaInput('')
+            setLoading(false)
+            return
+        }
+
+        const lastSubmit = localStorage.getItem('lastWalkinSubmit')
+        if (lastSubmit && Date.now() - parseInt(lastSubmit) < 600000) { // 10 minutes rate limit
+            setErrorMsg('You have already submitted a request recently. Please try again later.')
+            setLoading(false)
+            return
+        }
 
         const vn = form.vehicle_number.toUpperCase().replace(/[^A-Z0-9]/g, '')
         if (!/^[A-Z]{2}[0-9]{2}[A-Z]{1,2}[0-9]{4}$/.test(vn)) {
@@ -68,7 +85,9 @@ export default function WalkInRegistration() {
         valid_until.setHours(valid_until.getHours() + 2) // 2 hours for pending walk-ins
 
         const token = generatePassString(form.guest_name, vn)
-        const otp = Math.floor(100000 + Math.random() * 900000).toString()
+        const array = new Uint32Array(1);
+        crypto.getRandomValues(array);
+        const otp = String(100000 + (array[0] % 900000));
 
         const { data, error: insertErr } = await supabase.from('parkease_guest_passes').insert([{
             sponsor_id: null,
@@ -97,6 +116,7 @@ export default function WalkInRegistration() {
             
             setErrorMsg(displayError)
         } else {
+            localStorage.setItem('lastWalkinSubmit', Date.now().toString())
             setSuccessData({ otp, vn, name: form.guest_name })
         }
         setLoading(false)
@@ -230,6 +250,18 @@ export default function WalkInRegistration() {
                                 <option value="Other">Other</option>
                             </select>
                         </div>
+                    </div>
+
+                    <div>
+                        <label className="label">Security Question: What is {captcha.num1} + {captcha.num2}?</label>
+                        <input
+                            required
+                            type="number"
+                            className="input"
+                            placeholder="Answer"
+                            value={captchaInput}
+                            onChange={e => setCaptchaInput(e.target.value)}
+                        />
                     </div>
 
                     <button

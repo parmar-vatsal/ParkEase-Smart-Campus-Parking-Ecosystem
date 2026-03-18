@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { supabase, supabaseSecondary } from '../lib/supabase'
+import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { QRCodeSVG } from 'qrcode.react'
 import {
@@ -308,7 +308,9 @@ export default function AdminDashboard() {
         valid_until.setHours(valid_until.getHours() + parseInt(adminPassForm.duration_hours))
 
         const token = generatePassString(adminPassForm.guest_name, vn, adminPassForm.duration_hours)
-        const otp = Math.floor(100000 + Math.random() * 900000).toString()
+        const array = new Uint32Array(1);
+        crypto.getRandomValues(array);
+        const otp = String(100000 + (array[0] % 900000));
 
         const { error: insertErr } = await supabase.from('parkease_guest_passes').insert([{
             sponsor_id: profile.id, // The admin's profile ID
@@ -406,13 +408,18 @@ export default function AdminDashboard() {
         e.preventDefault()
         setGuardLoading(true)
         setGuardMessage(null)
-        const { error } = await supabaseSecondary.auth.signUp({
-            email: guardForm.email,
-            password: guardForm.password,
-            options: { data: { full_name: guardForm.fullName, phone: guardForm.phone, role: 'guard' } }
+        
+        const { data, error } = await supabase.functions.invoke('create-guard', {
+            body: {
+                email: guardForm.email,
+                password: guardForm.password,
+                fullName: guardForm.fullName,
+                phone: guardForm.phone
+            }
         })
-        if (error) {
-            setGuardMessage({ type: 'error', text: error.message })
+
+        if (error || (data && data.error)) {
+            setGuardMessage({ type: 'error', text: error?.message || data?.error || 'Failed to create guard' })
         } else {
             setGuardMessage({ type: 'success', text: `Guard account created for ${guardForm.fullName}! They can now log in at /login.` })
             setGuardForm({ fullName: '', email: '', phone: '', password: '' })

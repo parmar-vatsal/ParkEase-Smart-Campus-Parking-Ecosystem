@@ -91,7 +91,9 @@ export default function GuestInvites() {
         valid_until.setHours(valid_until.getHours() + parseInt(form.duration_hours))
 
         const token = generatePassString(form.guest_name, vn, form.duration_hours)
-        const otp = Math.floor(100000 + Math.random() * 900000).toString()
+        const array = new Uint32Array(1);
+        crypto.getRandomValues(array);
+        const otp = String(100000 + (array[0] % 900000));
 
         const { error: insertErr } = await supabase.from('parkease_guest_passes').insert([{
             sponsor_id: profile.id,

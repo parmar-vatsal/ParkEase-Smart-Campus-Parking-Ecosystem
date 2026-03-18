@@ -40,10 +40,11 @@ import cv2
 import easyocr
 import numpy as np
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends, HTTPException, Security, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security.api_key import APIKeyHeader
 from PIL import Image
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)s  %(message)s")
@@ -55,10 +56,18 @@ app = FastAPI(title="ParkEase ANPR Server", version="1.0.0")
 # Allow the React dev server (and any Vercel deploy) to call this local server
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],       # allow all origins — the server is localhost-only anyway
+    allow_origins=["https://parkease.vercel.app", "http://localhost:5173", "http://127.0.0.1:5173"],
     allow_methods=["POST", "GET", "OPTIONS"],
     allow_headers=["*"],
 )
+
+API_KEY = os.environ.get("ANPR_API_KEY", "parkease-secret-key-2026")
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+async def get_api_key(api_key_header: str = Security(api_key_header)):
+    if api_key_header == API_KEY:
+        return api_key_header
+    raise HTTPException(status_code=403, detail="Could not validate API key")
 
 # ── Global model handles (loaded once at startup) ─────────────────────────────
 yolo_model = None
@@ -98,7 +107,7 @@ async def load_models():
 
 # ── Request / Response schemas ────────────────────────────────────────────────
 class DetectRequest(BaseModel):
-    image: str   # base64-encoded image (JPEG or PNG)
+    image: str = Field(..., max_length=13333333)   # base64-encoded image (JPEG or PNG), max ~10MB
 
 
 class DetectResponse(BaseModel):
@@ -218,7 +227,7 @@ def ocr_region(img_bgr: np.ndarray) -> tuple[str, float]:
 
 # ── Main detection endpoint ───────────────────────────────────────────────────
 @app.post("/detect", response_model=DetectResponse)
-async def detect(req: DetectRequest):
+async def detect(req: DetectRequest, api_key: str = Security(get_api_key)):
     try:
         img = b64_to_cv2(req.image)
         if img is None:
@@ -291,7 +300,7 @@ async def detect(req: DetectRequest):
 
     except Exception as exc:
         log.error(f"Detection error: {exc}", exc_info=True)
-        return DetectResponse(plate=None, confidence=0.0, raw="")
+        raise HTTPException(status_code=500, detail="Internal server error during detection")
 
 
 # ── Health check ──────────────────────────────────────────────────────────────
@@ -325,7 +334,7 @@ if __name__ == "__main__":
         global public_url, tunnel_proc
         try:
             tunnel_proc = subprocess.Popen(
-                ["ssh", "-o", "StrictHostKeyChecking=no",
+                ["ssh", "-o", "StrictHostKeyChecking=accept-new",
                  "-R", "80:localhost:8000", "nokey@localhost.run"],
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, bufsize=1

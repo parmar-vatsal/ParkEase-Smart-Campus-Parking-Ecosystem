@@ -33,14 +33,3 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     },
 })
 
-// Secondary client for admin operations (e.g. creating guard accounts).
-// Uses distinct storage to avoid ANY lock sharing with the primary client.
-export const supabaseSecondary = createClient(supabaseUrl, supabaseAnonKey, {
-    auth: {
-        persistSession: false,
-        autoRefreshToken: false,
-        detectSessionInUrl: false,
-        storageKey: 'sb-amjrbnanzigqpggmvzgw-admin-token',
-    }
-})
-

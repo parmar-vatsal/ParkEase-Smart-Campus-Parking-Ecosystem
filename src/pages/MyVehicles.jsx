@@ -105,7 +105,6 @@ export default function MyVehicles() {
             // Start the 90-day deletion cooldown
             await supabase.from('parkease_profiles').update({ last_vehicle_deleted_at: new Date().toISOString() }).eq('id', profile.id)
             setVehicles(vehicles.filter(v => v.id !== id))
-            window.location.reload()
         }
 
         setActionLoading(false)

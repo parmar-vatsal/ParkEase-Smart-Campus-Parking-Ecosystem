@@ -1,9 +1,10 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { ParkingCircle, Mail, Lock, User, Phone, Hash, Building, ArrowRight, GraduationCap, Upload, Image as ImageIcon } from 'lucide-react'
 
 export default function StaffRegister() {
+    const navigate = useNavigate()
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState('')
     const [successMessage, setSuccessMessage] = useState(false)
@@ -87,7 +88,7 @@ export default function StaffRegister() {
             setSuccessMessage(true)
             setLoading(false)
             // Redirect will be handled by AuthContext + App.jsx routing
-            setTimeout(() => {
+            setTnavigate('/dashboard')
                 window.location.href = '/dashboard'
             }, 1500)
 
