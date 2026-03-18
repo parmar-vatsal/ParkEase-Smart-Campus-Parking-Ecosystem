@@ -1,0 +1,14 @@
+﻿<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+    <defs>
+        <linearGradient id="primaryGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" style="stop-color:#6366f1;stop-opacity:1" />
+            <stop offset="100%" style="stop-color:#4f46e5;stop-opacity:1" />
+        </linearGradient>
+    </defs>
+    <!-- Background Circle -->
+    <circle cx="256" cy="256" r="230" fill="url(#primaryGrad)" />
+    
+    <!-- White Inner Car/P-shape abstract -->
+    <path d="M220 150 h 70 q 60 0 60 60 q 0 60 -60 60 h -35 v 100 h -35 z" fill="#ffffff" />
+    <path d="M255 185 h 35 q 25 0 25 25 q 0 25 -25 25 h -35 z" fill="url(#primaryGrad)" />
+</svg>
