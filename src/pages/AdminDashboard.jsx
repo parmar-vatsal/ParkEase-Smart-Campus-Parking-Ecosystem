@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
+import { toast } from 'react-hot-toast'
 import { useAuth } from '../context/AuthContext'
 import { getCapacityData } from '../utils/capacity'
 import { formatDate, formatDuration, getCapacityColor } from '../utils/format'
@@ -222,9 +223,9 @@ const fetchAllVehicles = async () => {
         const until = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
         const { error } = await supabase.from('parkease_profiles').update({ emergency_vehicle_until: until }).eq('id', userId)
         if (error) {
-            alert('Failed to grant pass: ' + error.message)
+            toast.error('Failed to grant pass: ' + error.message)
         } else {
-            alert('Pass granted successfully valid for 24 hours.')
+            toast.success('Pass granted successfully for 24 hours.')
             if (selectedVehicle?.parkease_profiles?.id === userId) {
                 setSelectedVehicle(prev => ({
                     ...prev,
@@ -823,3 +824,4 @@ const fetchAllVehicles = async () => {
         </div>
     )
 }
+
