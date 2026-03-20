@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
+import { getCapacityData } from '../utils/capacity'
+import { formatDate, getCapacityColor } from '../utils/format'
 import { Car, Plus, MapPin, Clock, TrendingUp, Bike, CarFront } from 'lucide-react'
 
 export default function StudentDashboard() {
@@ -12,8 +14,8 @@ export default function StudentDashboard() {
     const [loading, setLoading] = useState(true)
 
     useEffect(() => {
-        fetchData()
-    }, [])
+        if (profile?.id) fetchData()
+    }, [profile?.id])
 
     const fetchData = async () => {
         // Fetch user's vehicles
@@ -23,72 +25,8 @@ export default function StudentDashboard() {
             .eq('owner_id', profile.id)
             .order('created_at', { ascending: false })
 
-        // Fetch ALL active zones directly (not the view, which may miss new zones)
-        const { data: zonesData } = await supabase
-            .from('parkease_zones')
-            .select('*')
-            .eq('status', 'active')
-            .order('name')
-
-        // Fetch current occupancy from active parking logs
-        const { data: activeLogs } = await supabase
-            .from('parkease_logs')
-            .select('zone_id, vehicle_number, parkease_vehicles(vehicle_type)')
-            .eq('status', 'inside')
-
-        // Fetch active guest passes to determine their vehicle types
-        const { data: activeGuests } = await supabase
-            .from('parkease_guest_passes')
-            .select('vehicle_number, vehicle_type')
-            .eq('status', 'active')
-
-        const guestTypeMap = {}
-        if (activeGuests) {
-            activeGuests.forEach(g => {
-                guestTypeMap[g.vehicle_number] = g.vehicle_type
-            })
-        }
-
-        const capacityRows = []
-        for (const zone of (zonesData || [])) {
-            // Count active vehicles in this zone by type
-            const inside2w = (activeLogs || []).filter(l => {
-                if (l.zone_id !== zone.id) return false;
-                if (l.parkease_vehicles?.vehicle_type) return l.parkease_vehicles.vehicle_type === 'two_wheeler';
-                return guestTypeMap[l.vehicle_number] === 'two_wheeler';
-            }).length;
-
-            const inside4w = (activeLogs || []).filter(l => {
-                if (l.zone_id !== zone.id) return false;
-                if (l.parkease_vehicles?.vehicle_type) return l.parkease_vehicles.vehicle_type === 'four_wheeler';
-                return guestTypeMap[l.vehicle_number] === 'four_wheeler';
-            }).length;
-
-            if (zone.capacity_2w_total > 0) {
-                const total = zone.capacity_2w_total + (zone.capacity_2w_overflow || 0)
-                capacityRows.push({
-                    zone_id: zone.id,
-                    zone_name: zone.name,
-                    zone_code: zone.code,
-                    vehicle_type: 'two_wheeler',
-                    total_slots: total,
-                    available_slots: Math.max(0, total - inside2w),
-                    occupancy_percent: total > 0 ? Math.round((inside2w / total) * 100) : 0
-                })
-            }
-            if (zone.capacity_4w_total > 0) {
-                const total = zone.capacity_4w_total + (zone.capacity_4w_overflow || 0)
-                capacityRows.push({
-                    zone_id: zone.id,
-                    zone_name: zone.name,
-                    zone_code: zone.code,
-                    vehicle_type: 'four_wheeler',
-                    total_slots: total,
-                    available_slots: Math.max(0, total - inside4w),
-                    occupancy_percent: total > 0 ? Math.round((inside4w / total) * 100) : 0
-                })
-            }
-        }
+        // Fetch current occupancy using shared utility
+        const { data: capacityRows } = await getCapacityData()
 
         // Fetch recent logs for user
         const { data: logData } = await supabase
@@ -99,15 +37,9 @@ export default function StudentDashboard() {
             .limit(5)
 
         setVehicles(vehicleData || [])
-        setCapacity(capacityRows)
+        setCapacity(capacityRows || [])
         setRecentLogs(logData || [])
         setLoading(false)
-    }
-
-    const getCapacityColor = (percent) => {
-        if (percent >= 90) return '#f43f5e'
-        if (percent >= 70) return '#f59e0b'
-        return '#10b981'
     }
 
     const totalTwoWheeler = capacity.filter(c => c.vehicle_type === 'two_wheeler')

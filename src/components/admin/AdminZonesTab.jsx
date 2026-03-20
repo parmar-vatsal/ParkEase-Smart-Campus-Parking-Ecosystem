@@ -246,7 +246,7 @@ export default function AdminZonesTab() {
             if (error) throw error;
             fetchData();
         } catch (err) {
-            alert('Error deleting zone: ' + err.message);
+            toast.error('Error deleting zone: ' + err.message);
         }
     };
 

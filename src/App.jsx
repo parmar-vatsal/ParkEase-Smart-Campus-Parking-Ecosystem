@@ -1,20 +1,23 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import Layout from './components/Layout'
-import Login from './pages/Login'
-import Register from './pages/Register'
-import StaffRegister from './pages/StaffRegister'
-import StudentDashboard from './pages/StudentDashboard'
-import StaffDashboard from './pages/StaffDashboard'
-import GuardScanner from './pages/GuardScanner'
-import AdminDashboard from './pages/AdminDashboard'
-import VehicleRegister from './pages/VehicleRegister'
-import MyVehicles from './pages/MyVehicles'
-import GuestInvites from './pages/GuestInvites'
-import WalkInRegistration from './pages/WalkInRegistration'
-import StudentProfile from './pages/StudentProfile'
-import ForgotPassword from './pages/ForgotPassword'
-import ResetPassword from './pages/ResetPassword'
+import { Suspense, lazy } from 'react'
+const Login = lazy(() => import('./pages/Login'))
+const Register = lazy(() => import('./pages/Register'))
+const StaffRegister = lazy(() => import('./pages/StaffRegister'))
+const StudentDashboard = lazy(() => import('./pages/StudentDashboard'))
+const StaffDashboard = lazy(() => import('./pages/StaffDashboard'))
+const GuardScanner = lazy(() => import('./pages/GuardScanner'))
+const AdminDashboard = lazy(() => import('./pages/AdminDashboard'))
+const VehicleRegister = lazy(() => import('./pages/VehicleRegister'))
+const MyVehicles = lazy(() => import('./pages/MyVehicles'))
+const GuestInvites = lazy(() => import('./pages/GuestInvites'))
+const WalkInRegistration = lazy(() => import('./pages/WalkInRegistration'))
+const StudentProfile = lazy(() => import('./pages/StudentProfile'))
+const ForgotPassword = lazy(() => import('./pages/ForgotPassword'))
+const ResetPassword = lazy(() => import('./pages/ResetPassword'))
+
+
 
 // Full-screen loading spinner
 function LoadingScreen() {
@@ -65,84 +68,73 @@ export default function App() {
     return (
         <BrowserRouter>
             <AuthProvider>
-                <Routes>
-                    {/* --- Public Routes (redirect away if already logged in) --- */}
-                    <Route path="/login" element={<PublicRoute><Login /></PublicRoute>} />
-                    <Route path="/register" element={<PublicRoute><Register /></PublicRoute>} />
-                    <Route path="/staff-register" element={<PublicRoute><StaffRegister /></PublicRoute>} />
-                    <Route path="/visitor" element={<WalkInRegistration />} />
+                <Suspense fallback={<LoadingScreen />}>
+                    <Routes>
+                        {/* --- Public Routes (redirect away if already logged in) --- */}
+                        <Route path="/login" element={<PublicRoute><Login /></PublicRoute>} />
+                        <Route path="/register" element={<PublicRoute><Register /></PublicRoute>} />
+                        <Route path="/staff/register" element={<PublicRoute><StaffRegister /></PublicRoute>} />
+                        <Route path="/forgot-password" element={<PublicRoute><ForgotPassword /></PublicRoute>} />
+                        <Route path="/reset-password" element={<PublicRoute><ResetPassword /></PublicRoute>} />
+                        <Route path="/walkin" element={<PublicRoute><WalkInRegistration /></PublicRoute>} />
 
-                    {/* --- Password Reset Flow --- */}
-                    <Route path="/forgot-password" element={<PublicRoute><ForgotPassword /></PublicRoute>} />
-                    <Route path="/reset-password" element={<ResetPassword />} />
+                        {/* --- Protected Routes (require login) --- */}
+                        {/* 1. Dashboard Routing (Main Entry) */}
+                        <Route path="/dashboard" element={
+                            <ProtectedRoute>
+                                <Layout>
+                                    <RoleDashboard />
+                                </Layout>
+                            </ProtectedRoute>
+                        } />
 
-                    {/* --- Dashboard router --- */}
-                    <Route path="/dashboard" element={
-                        <ProtectedRoute><DashboardRedirect /></ProtectedRoute>
-                    } />
+                        {/* 2. Admin & Guard Specific Routes */}
+                        <Route path="/scanner" element={
+                            <ProtectedRoute allowedRoles={['guard', 'admin']}>
+                                <Layout>
+                                    <GuardScanner />
+                                </Layout>
+                            </ProtectedRoute>
+                        } />
 
-                    {/* --- Student Routes --- */}
-                    <Route path="/student" element={
-                        <ProtectedRoute allowedRoles={['student']}>
-                            <Layout><StudentDashboard /></Layout>
-                        </ProtectedRoute>
-                    } />
-                    <Route path="/student/vehicles" element={
-                        <ProtectedRoute allowedRoles={['student']}>
-                            <Layout><MyVehicles /></Layout>
-                        </ProtectedRoute>
-                    } />
-                    <Route path="/student/register-vehicle" element={
-                        <ProtectedRoute allowedRoles={['student']}>
-                            <Layout><VehicleRegister /></Layout>
-                        </ProtectedRoute>
-                    } />
-                    <Route path="/student/guests" element={
-                        <ProtectedRoute allowedRoles={['student']}>
-                            <Layout><GuestInvites /></Layout>
-                        </ProtectedRoute>
-                    } />
-                    <Route path="/student/profile" element={
-                        <ProtectedRoute allowedRoles={['student']}>
-                            <Layout><StudentProfile /></Layout>
-                        </ProtectedRoute>
-                    } />
+                        {/* 3. Student / Staff Own Routes */}
+                        <Route path="/vehicles/register" element={
+                            <ProtectedRoute allowedRoles={['student', 'staff']}>
+                                <Layout>
+                                    <VehicleRegister />
+                                </Layout>
+                            </ProtectedRoute>
+                        } />
 
-                    {/* --- Staff / Faculty Routes --- */}
-                    <Route path="/staff" element={
-                        <ProtectedRoute allowedRoles={['staff', 'faculty']}>
-                            <Layout><StaffDashboard /></Layout>
-                        </ProtectedRoute>
-                    } />
-                    <Route path="/staff/vehicles" element={
-                        <ProtectedRoute allowedRoles={['staff', 'faculty']}>
-                            <Layout><MyVehicles /></Layout>
-                        </ProtectedRoute>
-                    } />
-                    <Route path="/staff/register-vehicle" element={
-                        <ProtectedRoute allowedRoles={['staff', 'faculty']}>
-                            <Layout><VehicleRegister /></Layout>
-                        </ProtectedRoute>
-                    } />
+                        <Route path="/vehicles" element={
+                            <ProtectedRoute allowedRoles={['student', 'staff']}>
+                                <Layout>
+                                    <MyVehicles />
+                                </Layout>
+                            </ProtectedRoute>
+                        } />
 
-                    {/* --- Guard Routes --- */}
-                    <Route path="/guard" element={
-                        <ProtectedRoute allowedRoles={['guard', 'admin']}>
-                            <Layout><GuardScanner /></Layout>
-                        </ProtectedRoute>
-                    } />
+                        <Route path="/invites" element={
+                            <ProtectedRoute allowedRoles={['student', 'staff']}>
+                                <Layout>
+                                    <GuestInvites />
+                                </Layout>
+                            </ProtectedRoute>
+                        } />
 
-                    {/* --- Admin Routes --- */}
-                    <Route path="/admin" element={
-                        <ProtectedRoute allowedRoles={['admin']}>
-                            <Layout><AdminDashboard /></Layout>
-                        </ProtectedRoute>
-                    } />
+                        <Route path="/profile" element={
+                            <ProtectedRoute allowedRoles={['student', 'staff']}>
+                                <Layout>
+                                    <StudentProfile />
+                                </Layout>
+                            </ProtectedRoute>
+                        } />
 
-                    {/* --- Fallbacks --- */}
-                    <Route path="/" element={<Navigate to="/login" replace />} />
-                    <Route path="*" element={<Navigate to="/login" replace />} />
-                </Routes>
+                        {/* --- Fallbacks --- */}
+                        <Route path="/" element={<Navigate to="/login" replace />} />
+                        <Route path="*" element={<Navigate to="/login" replace />} />
+                    </Routes>
+                </Suspense>
             </AuthProvider>
         </BrowserRouter>
     )
